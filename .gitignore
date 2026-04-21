@@ -1,0 +1,50 @@
+# =============================================================================
+# yral-rishi-sentry — .gitignore
+# =============================================================================
+# Philosophy: be explicit about what we exclude and WHY. Future-Rishi should
+# be able to read this file and understand what kinds of files must never be
+# committed. If you add an entry, add a WHY comment.
+# =============================================================================
+
+# --- Secrets ---------------------------------------------------------------
+# Any accidentally-created secret file must not slip into git.
+# Real secrets live in GitHub Secrets (for CI) or on rishi-3 in
+# docker-compose env files under /opt/sentry-upstream/.env (NOT in this repo).
+.env
+.env.*
+!.env.example
+*.secret
+*.key
+*.pem
+
+# Sentry's generated secrets directory (if someone ever runs install.sh from
+# this repo instead of from /opt/sentry-upstream — shouldn't happen, but
+# belt-and-braces).
+sentry/sentry-data/
+sentry/sentry-volumes/
+
+# --- Local editor / OS junk ------------------------------------------------
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Python artefacts (the scripts in scripts/ may use python helpers) ------
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
+# --- Runtime / logs --------------------------------------------------------
+*.log
+logs/
+
+# --- Ad-hoc scratch --------------------------------------------------------
+# Anything inside a "tmp/" or "scratch/" directory at the repo root is
+# assumed to be throwaway. Commit by moving out first.
+tmp/
+scratch/
