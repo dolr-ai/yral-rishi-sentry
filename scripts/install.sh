@@ -244,6 +244,29 @@ SENTRY_BIND=127.0.0.1:9000
 EOF
 chmod 600 "${ENV_CUSTOM}"
 
+# Source .env.custom into OUR shell so subsequent commands (upstream's
+# install.sh, and our docker-compose-up-d in step 9) inherit the values.
+#
+# WHY this is non-obvious: upstream's docker-compose.yml declares
+# `environment: SENTRY_SYSTEM_SECRET_KEY:` (bare key, no value). In
+# Compose V2 that form means "inherit from the SHELL environment of
+# whatever process invoked `docker compose`." It does NOT auto-read
+# from --env-file. --env-file is for YAML interpolation of `${VAR}`
+# references, not for bare `environment: KEY:` entries.
+#
+# Without this sourcing, `docker compose up -d` passes empty
+# SENTRY_SYSTEM_SECRET_KEY to web, web's Django initialization fails
+# with "The SECRET_KEY setting must not be empty", and web stays
+# unhealthy forever.
+#
+# `set -a` auto-exports every variable assigned until `set +a`, which
+# is the sugar needed to turn .env.custom's KEY=VALUE lines into
+# exported shell variables.
+set -a
+# shellcheck disable=SC1090
+source "${ENV_CUSTOM}"
+set +a
+
 # -----------------------------------------------------------------------------
 # Step 8: run upstream's install.sh with the non-interactive flag.
 # This is the long step (20-40 min on first run, 2-5 min on re-runs).
@@ -275,9 +298,17 @@ cd "${REPO_DIR}"
 
 # -----------------------------------------------------------------------------
 # Step 9: bring the stack up.
+#
+# --force-recreate is important for re-runs after a failed first install:
+# if a container was created with a broken env (e.g. empty
+# SENTRY_SYSTEM_SECRET_KEY before we fixed the env sourcing above),
+# Compose's config-hash check doesn't always notice the bare-env-var
+# change and would reuse the broken container. Forcing recreate every
+# time is slightly slower (~30 seconds extra on a healthy install) but
+# gives us a known-good container set on every install.sh run.
 # -----------------------------------------------------------------------------
-echo "==> docker compose up -d"
-(cd "${SENTRY_UPSTREAM_DIR}" && docker compose up -d)
+echo "==> docker compose up -d --force-recreate"
+(cd "${SENTRY_UPSTREAM_DIR}" && docker compose up -d --force-recreate)
 
 # -----------------------------------------------------------------------------
 # Step 10: verify health. Retry a few times since some containers take
