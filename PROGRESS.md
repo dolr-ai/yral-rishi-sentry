@@ -30,14 +30,26 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `[-]` skipped / 
 - [x] `scripts/install.sh` — idempotent bootstrap; places our overrides, runs upstream install.sh, verifies `/_health/`
 - [x] `scripts/upgrade.sh` — changelog-gated, dry-run-first upgrade with pre-upgrade backup hook
 
-**On-rishi-3 steps — not started (requires explicit go-ahead before touching shared infra)**
-- [ ] Set GitHub Secrets `SENTRY_HOST_IP`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` on this repo
-- [ ] Google Cloud Console: create OAuth 2.0 Client ID (deferred — Phase 4 can be done after Phase 2 install; install.sh will still run with placeholder values, SSO just won't work until then)
-- [ ] SSH to rishi-3, `sudo mkdir -p /opt/sentry-upstream && sudo chown deploy:deploy /opt/sentry-upstream`
-- [ ] `git clone` this repo to rishi-3 `~/yral-rishi-sentry`
-- [ ] Run `scripts/install.sh` on rishi-3 (~20–40 min first-time)
-- [ ] `docker compose run --rm web createuser --email rishi@gobazzinga.io --password '<strong>' --superuser`
-- [ ] Verify `curl http://127.0.0.1:9000/_health/` returns `ok`
+**On-rishi-3 steps**
+- [x] `git clone` of yral-rishi-sentry to rishi-3 `~/yral-rishi-sentry` — DONE 2026-04-21
+- [x] `scripts/install.sh` run — DONE 2026-04-21 (7 attempts; 5 bugs fixed along the way, all now committed)
+- [x] Verify `curl http://127.0.0.1:9000/_health/` returns `ok` on rishi-3 — **PASSED**
+- [x] All 30+ Sentry containers healthy (web, nginx, relay, snuba-api, clickhouse, kafka, postgres, consumers) — CONFIRMED
+- [ ] **Gate C — Rishi creates superuser** (manually, so password never touches Claude):
+      `cd ~/sentry-upstream && docker compose run --rm web createuser --email rishi@gobazzinga.io --password '<strong-pw>' --superuser`
+- [ ] Set GitHub Secrets `SENTRY_HOST_IP`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (deferred; placeholder values currently in `.env.custom`)
+- [ ] Google Cloud Console: create OAuth 2.0 Client ID (Phase 4)
+
+## Install-time bugs encountered on first Phase 2 attempts (all fixed)
+
+For future reference — each of these is now baked into the install.sh in a way that prevents recurrence:
+
+1. `--skip-user-prompt` was deprecated at upstream 26.4.0 → replaced with `--skip-user-creation`, plus added `--no-report-self-hosted-issues` and `--apply-automatic-config-updates` to silence two other interactive prompts.
+2. `docker-compose.override.yml` named `worker` and `cron` — upstream renamed to `taskworker` and `taskscheduler` → updated our override with verified service names. Added a warning comment that names MUST be re-verified on every SENTRY_VERSION bump.
+3. Empty `SENTRY_SYSTEM_SECRET_KEY` broke Django boot → install.sh now generates + persists a key in `.env.custom`.
+4. Secret generation used `tr | head` which SIGPIPE'd under `pipefail` → switched to `python3 -c` with the `secrets` module.
+5. Generated secrets contained `&(*^#)` which broke bash `source` of `.env.custom` → switched to shell-safe alphabet (`a-zA-Z0-9-_`) AND defensively single-quote every value in the written file.
+6. Initial containers born without `SENTRY_SYSTEM_SECRET_KEY` because our shell didn't export it → install.sh now sources `.env.custom` into its own shell AND passes `--force-recreate` to compose.
 
 **Gate to Phase 3:** `/_health/` = ok from inside rishi-3.
 
