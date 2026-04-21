@@ -41,7 +41,53 @@
 
 # Compose V2 — no top-level `version:` field.
 
+# --- External networks -------------------------------------------------------
+#
+# sentry-web is a Swarm-wide attachable overlay network, created ONCE by
+# hand on a Swarm manager (rishi-1) with:
+#
+#   docker network create --driver overlay --attachable sentry-web
+#
+# Its sole purpose: give the Caddy containers on rishi-1 and rishi-2 a
+# private network path to Sentry's nginx running on rishi-3, without
+# exposing port 9000 on rishi-3's public interface.
+#
+# Why "external"? Because `docker network create` happened out-of-band
+# (hand-run on the Swarm manager), not by this compose file. Declaring
+# it external: true tells compose "this already exists, just attach the
+# services to it; don't try to create or delete it."
+#
+# IMPORTANT: if you ever tear down the Swarm or replace the network,
+# re-run the `docker network create ... sentry-web` command on the
+# manager before running scripts/install.sh again.
+networks:
+  sentry-web:
+    external: true
+    name: sentry-web
+
 services:
+
+  # --------------------------------------------------------------------------
+  # nginx — Sentry's public-facing entry point
+  # --------------------------------------------------------------------------
+  # We attach it to BOTH its compose-internal network (default) AND the
+  # sentry-web Swarm overlay. Upstream's service definition puts it on
+  # the default internal network so all the other Sentry services can
+  # talk to it; we add sentry-web on top so Caddy can reach it by DNS
+  # name (`sentry-self-hosted-nginx-1:80`) across hosts.
+  #
+  # The host-port mapping remains 127.0.0.1:9000 (via SENTRY_BIND in
+  # .env.custom) as a secondary reach-path for ad-hoc debugging on
+  # rishi-3. The primary traffic path is now Caddy → sentry-web
+  # overlay → nginx container.
+  nginx:
+    networks:
+      # "default" here means: keep the default network compose would
+      # have attached. Without this line, declaring the second network
+      # below would IMPLICITLY drop the default. Being explicit is
+      # safer than relying on the implicit default-preservation rules.
+      - default
+      - sentry-web
 
   # --------------------------------------------------------------------------
   # web — the Django app (Sentry UI + /api endpoints)
