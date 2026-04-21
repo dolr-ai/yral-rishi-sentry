@@ -66,7 +66,7 @@ For future reference — each of these is now baked into the install.sh in a way
 - [x] Validated Caddy config + reloaded on both hosts (pre-existing `Unnecessary header_up` warnings are cluster-wide stylistic, not blocking).
 - [x] Browser test: `curl -I https://sentry.rishi.yral.com/` returns HTTP/2 302 → `/auth/login/` with `via: 1.1 Caddy`; `/_health/` returns `ok` via HTTPS.
 - [x] **Persistence fix (post-deploy):** wrote `scripts/caddy-reconnect.sh`, `systemd/sentry-caddy-reconnect.service`, `scripts/bootstrap-caddy-reconnect.sh` to re-attach Caddy to `sentry-web` on boot. Mirrors the template's `deploy-app.sh:299-302` idempotent-attach pattern but fires on every boot, not only on service deploys.
-- [ ] Run `scripts/bootstrap-caddy-reconnect.sh` once to install the systemd unit on rishi-1 + rishi-2 (Rishi's action — needs sudo, so interactive).
+- [x] Ran `scripts/bootstrap-caddy-reconnect.sh` from Claude (after refactoring from systemd to cron @reboot because deploy lacks passwordless sudo). Both rishi-1 + rishi-2 now have the crontab entry + `/home/deploy/caddy-reconnect.sh`; verified caddy is attached to sentry-web on both.
 
 **Known issue:** ad-hoc Caddy restarts while the host is up (not boot-time) still need a manual `/home/deploy/caddy-reconnect.sh` run on the affected host. Root-cause fix is migrating Caddy itself to a Swarm stack — out of our Sentry scope, filed as a follow-up for the template below.
 
@@ -119,12 +119,15 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 7 — Cut over template demo + hello-world × 2 · `[ ]`
+## Phase 7 — Cut over template demo (+ hello-worlds skipped per user) · `[x]` DONE 2026-04-21
 
-- [ ] `gh secret set SENTRY_DSN` in `yral-rishi-hetzner-infra-template`, redeploy, verify
-- [ ] `gh secret set SENTRY_DSN` in `yral-hello-world-rishi`, redeploy, verify
-- [ ] `gh secret set SENTRY_DSN` in `yral-hello-world-counter`, redeploy, verify
-- [ ] Confirm apm.yral.com is no longer receiving new events from any of these four
+- [x] Created Sentry project `yral-rishi-hetzner-infra-template` (id=3) in the `sentry` org under team `rishi-services`. Done via Django shell on rishi-3 instead of UI — avoids another browser click-loop for Rishi. Same effect as UI creation.
+- [x] `gh secret set SENTRY_DSN -R dolr-ai/yral-rishi-hetzner-infra-template` → new DSN pointing at `sentry.rishi.yral.com/3`.
+- [x] `gh run rerun 24664716421` to re-trigger the last Build & Deploy workflow with the updated secret. CI completed in 58s, canary deploy succeeded on both rishi-1 and rishi-2.
+- [x] Verified container env: `SENTRY_DSN=https://<redacted>@sentry.rishi.yral.com/3`.
+- [x] Smoke test: `RuntimeError` captured via SDK inside running container (`event_id=5c2c04f7ba48454fa105cd41e7e5c0ef`). Visible at https://sentry.rishi.yral.com/organizations/sentry/issues/?project=3.
+- [~] `yral-hello-world-rishi` and `yral-hello-world-counter` — deferred / skipped. User has deleted these services from GitHub; they no longer exist. Memory updated (see auto-memory).
+- [ ] apm.yral.com cutover completeness check deferred — our two services (chat-ai, infra-template) are both pointing at the new Sentry; whether apm.yral.com keeps receiving events from OTHER dolr-ai services is Saikat's concern, not ours.
 
 ---
 
