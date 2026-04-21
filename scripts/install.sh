@@ -196,9 +196,21 @@ if [[ -f "${ENV_CUSTOM}" ]] && grep -q "^SENTRY_SYSTEM_SECRET_KEY=" "${ENV_CUSTO
   SECRET_KEY="$(grep "^SENTRY_SYSTEM_SECRET_KEY=" "${ENV_CUSTOM}" | cut -d= -f2-)"
 else
   echo "    generating new SENTRY_SYSTEM_SECRET_KEY (first install)"
-  # Use the same character set + length upstream does in generate-secret-key.sh
-  # so Sentry accepts it without fuss.
-  SECRET_KEY="$(LC_ALL=C tr -dc 'a-z0-9@#%^&*(-_=+)' </dev/urandom | head -c 50)"
+  # Use the same character set + length upstream uses in generate-secret-key.sh
+  # (50 chars from `a-z0-9@#%^&*(-_=+)` — accepted by Sentry without fuss).
+  #
+  # WHY python3 and not the obvious tr-pipe that upstream uses? A pipeline
+  # like `tr -dc '<set>' </dev/urandom | head -c 50` sends /dev/urandom
+  # through tr indefinitely; once `head -c 50` exits, tr gets SIGPIPE (exit
+  # 141), which under `set -o pipefail` aborts the whole script. Upstream's
+  # version uses `head /dev/urandom` (10-line cap) to bound the input, but
+  # the line-count is not portable across `head` implementations and still
+  # risks SIGPIPE on short outputs. python3 is unambiguously available on
+  # Ubuntu 24.04 (rishi-3's OS), cryptographically proper via `secrets`,
+  # and has no pipe semantics to go wrong.
+  SECRET_KEY="$(python3 -c 'import secrets, string
+alphabet = string.ascii_lowercase + string.digits + "@#%^&*(-_=+)"
+print("".join(secrets.choice(alphabet) for _ in range(50)))')"
 fi
 
 # Write the full .env.custom. This file is chmod 600 (owner read/write only)
