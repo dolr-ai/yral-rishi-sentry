@@ -97,8 +97,9 @@ if [[ ! -d "${SENTRY_UPSTREAM_DIR}/.git" ]]; then
   echo "==> Cloning getsentry/self-hosted to ${SENTRY_UPSTREAM_DIR} at tag ${SENTRY_VERSION}"
   # --depth 1 keeps the clone small; we don't need upstream history on rishi-3.
   # --branch accepts a tag (it's a "ref").
-  sudo mkdir -p "${SENTRY_UPSTREAM_DIR}"
-  sudo chown "$(whoami):$(whoami)" "${SENTRY_UPSTREAM_DIR}"
+  # No sudo: SENTRY_UPSTREAM_DIR is under the deploy user's home, so we
+  # own it directly. See project.config for the rationale.
+  mkdir -p "${SENTRY_UPSTREAM_DIR}"
   git clone --depth 1 --branch "${SENTRY_VERSION}" \
     https://github.com/getsentry/self-hosted "${SENTRY_UPSTREAM_DIR}"
 else
