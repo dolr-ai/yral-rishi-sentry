@@ -51,25 +51,27 @@ system.internal-url-prefix: 'http://web:9000'
 # the env-var value from install-time generation wins.
 # system.secret-key: '!!changeme!!'
 
-# Admin users that should receive system notifications (things like
-# "failed background job" alerts). Empty for now — Rishi will add his
-# own email after Phase 4 when his account exists.
-system.admin-email: 'rishi@gobazzinga.io'
-
-#######################
-# Registration & Auth #
-#######################
-
-# No public sign-up. Critical. Without this, ANY visitor to
-# sentry.rishi.yral.com could create an account. With SSO required
-# (configured in the UI after Phase 4), this is belt-and-braces.
-auth.allow-registration: false
-
-# When a user tries to access the Sentry org and isn't a member, Sentry
-# should show them a clear "ask an admin for access" page rather than
-# silently creating a guest account.
-auth.ip-rate-limit: 0
-auth.user-rate-limit: 0
+# system.admin-email — intentionally NOT set here.
+# auth.allow-registration — intentionally NOT set here.
+# beacon.anonymous — intentionally NOT set here (see below in Beacon section).
+#
+# WHY: Sentry's first-time setup wizard (shown to a freshly-installed
+# instance at /organizations/sentry/auth/ "Welcome to Sentry") collects
+# exactly these three settings and writes them to the DB options store
+# via PUT /api/0/internal/options/?query=is:required. If they're pinned
+# in this file, that API call returns 400 ("this option is set via
+# config file, cannot be modified") and the wizard never completes.
+#
+# The values to enter when the wizard runs:
+#   Admin Email:             rishi@gobazzinga.io
+#   Allow Registration:      off (do NOT tick)
+#   Beacon / Usage Stats:    "Please keep my usage information anonymous"
+#   CPU/RAM usage:           "No, I would prefer to keep CPU/RAM usage private"
+#
+# Once the wizard is complete these live in Sentry's DB options store
+# and are editable via the superuser admin panel. config.yml re-pinning
+# after-the-fact would re-break the same API, so we intentionally keep
+# them out of this file permanently.
 
 #################
 # Google OAuth  #
@@ -132,14 +134,18 @@ mail.backend: 'dummy'
 # github-app.private-key: ''
 
 #################
-# Beacon (off)  #
+# Beacon        #
 #################
 #
-# Sentry self-hosted phones home to sentry.io with anonymized usage
-# telemetry by default (version, number of users, number of events).
-# Nothing confidential, but disable it — our stack is internal and the
-# telemetry adds no value to us.
-beacon.anonymous: true
+# beacon.anonymous — intentionally NOT set here.
+# Same reason as system.admin-email / auth.allow-registration above:
+# this value is collected by the first-time setup wizard, and pinning
+# it in config.yml causes the wizard save to 400. The wizard writes
+# the value to the DB options store instead.
+#
+# Recommended answer in the wizard:
+#   "Please keep my usage information anonymous"
+#   "No, I would prefer to keep CPU/RAM usage private"
 
 #################
 # File storage  #
