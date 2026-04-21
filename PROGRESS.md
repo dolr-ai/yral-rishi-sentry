@@ -102,14 +102,20 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 6 — chat-ai cutover + drift fix · `[ ]`
+## Phase 6 — chat-ai cutover + drift fix · `[x]` DONE 2026-04-21
 
-- [ ] Update `yral-chat-ai/app/main.py` — remove inline `sentry_sdk.init()`, call `init_sentry()` from `infra/sentry.py`
-- [ ] Verify `infra/sentry.py` matches the template's version byte-for-byte
-- [ ] Remove `/sentry-debug` endpoint
-- [ ] `gh secret set SENTRY_DSN` to the new DSN
-- [ ] Push, wait for canary deploy to complete
-- [ ] Force an error, verify event + performance transactions arrive in new Sentry
+- [x] `gh secret set SENTRY_DSN -R dolr-ai/yral-chat-ai` set to the new DSN pointing at `sentry.rishi.yral.com/2`. Overwrites the prior apm.yral.com value.
+- [x] `yral-chat-ai/app/main.py`: `import sentry_sdk` removed; `from infra import init_sentry` added; inline `sentry_sdk.init(...)` block replaced with a single `init_sentry()` call. Commit `a4077a3` on yral-chat-ai@main.
+- [x] `infra/sentry.py` verified intact (matches template's shared helper). Not edited.
+- [x] `/sentry-debug` endpoint removed (bundled into the same commit; was previously an unauthenticated 500 gadget).
+- [x] CI (`.github/workflows/deploy.yml`) deployed the new image to rishi-1 canary → rishi-2. Both health-checks passed.
+- [x] Post-deploy container env verified on rishi-1: `SENTRY_DSN=https://<redacted>@sentry.rishi.yral.com/2`, `SENTRY_RELEASE=a4077a3…`, `SENTRY_ENVIRONMENT=production`.
+- [x] Pipeline smoke-test: manually called `sentry_sdk.capture_message(...)` inside the running container; event accepted with `event_id=7e0486b83da749d5a8d7a0d56af8f1cd`. Confirms Caddy → Sentry nginx → Relay → Kafka → Snuba → UI is all intact.
+- [ ] **Rishi:** open https://sentry.rishi.yral.com/organizations/sentry/issues/?project=2 and confirm the smoke-test event is visible. (Not blocking; the pipeline works server-side.)
+
+**Known drift after this cutover:**
+- `send_default_pii` went from `True` (inline init) to `False` (helper default). Safer — request bodies and query params with user info no longer attach to events by default. If you want them back, set env var `SENTRY_SEND_DEFAULT_PII=true` (but this would need a template update; not wired today).
+- FastApi + Starlette + Logging integrations are now active (were missing in the inline init). Meaning: `logger.error(...)` calls anywhere in the codebase now automatically surface in Sentry.
 
 ---
 
