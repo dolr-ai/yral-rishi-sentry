@@ -16,7 +16,7 @@ This repo is a thin wrapper around the upstream `getsentry/self-hosted` Docker C
 
 | Component | Host | Notes |
 |---|---|---|
-| Sentry stack (Docker Compose) | **rishi-3** (`136.243.147.225`) | Colocated with etcd + Patroni follower; see PRE-FLIGHT.md for capacity evidence |
+| Sentry stack (Docker Compose) | **rishi-3** (IP via GitHub Secret `SENTRY_HOST_IP`) | Colocated with etcd + Patroni follower; see PRE-FLIGHT.md for capacity evidence |
 | Caddy reverse proxy | rishi-1 + rishi-2 | Matches every other service in the cluster; handles TLS |
 | Public URL | `https://sentry.rishi.yral.com` | |
 | Auth | Google Workspace SSO, `@gobazzinga.io` only | Configured via Sentry's built-in `GOOGLE_DOMAIN_WHITELIST` |

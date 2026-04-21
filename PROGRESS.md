@@ -22,7 +22,8 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `[-]` skipped / 
 
 - [x] Create local repo at `~/Claude Projects/yral-rishi-sentry/`
 - [x] Pin `SENTRY_VERSION=26.4.0` in `project.config`
-- [ ] Create GitHub repo `dolr-ai/yral-rishi-sentry`
+- [x] Create GitHub repo `dolr-ai/yral-rishi-sentry` (live at https://github.com/dolr-ai/yral-rishi-sentry, public)
+- [ ] Set GitHub Secret `SENTRY_HOST_IP` on this repo (rishi-3's public IP — not stored in code, see project.config commentary)
 - [ ] SSH to rishi-3, clone `getsentry/self-hosted` to `/opt/sentry-upstream`, checkout tag `26.4.0`
 - [ ] Write `docker-compose.override.yml` (resource limits + volume paths + loopback bind)
 - [ ] Write `sentry/config.yml` (url-prefix + allow-registration: false, SSO stub)

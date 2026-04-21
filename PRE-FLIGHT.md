@@ -1,8 +1,8 @@
 # Phase 1 — Pre-flight capacity report for rishi-3
 
 **Captured:** 2026-04-21 09:09:33 UTC+02:00
-**Host:** rishi-3 — `deploy@136.243.147.225`
-**Captured by:** SSH session from Rishi's Mac, read-only commands only.
+**Host:** rishi-3 (public IP withheld from public repo — see GitHub Secret `SENTRY_HOST_IP`)
+**Captured by:** SSH session from Rishi's Mac as the `deploy` user, read-only commands only.
 
 ## Why this report exists
 
