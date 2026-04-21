@@ -4,19 +4,33 @@
 #
 # Docker Compose auto-merges a file named `docker-compose.override.yml` on
 # top of `docker-compose.yml` (they live side-by-side in
-# /opt/sentry-upstream/ on rishi-3). `scripts/install.sh` symlinks THIS
+# ~/sentry-upstream/ on rishi-3). `scripts/install.sh` symlinks THIS
 # file into that location so our overrides apply without modifying the
 # upstream file (which we'd have to reconcile on every Sentry upgrade).
 #
 # What this file does:
-#   1. Binds Sentry's public nginx port to 127.0.0.1 only, so the only
-#      way in from the internet is via Caddy on rishi-1/rishi-2.
-#   2. Caps RAM for the heaviest services so Sentry can't OOM the
+#   1. Caps RAM for the heaviest services so Sentry can't OOM the
 #      Patroni follower and etcd node sharing this host.
+#
+# What this file deliberately does NOT do:
+#   - Bind nginx to loopback. Upstream already reads `$SENTRY_BIND` from
+#     `.env.custom` (populated by scripts/install.sh) to build the port
+#     spec. We set `SENTRY_BIND=127.0.0.1:9000` there, so the port is
+#     already correct without a Compose-level override.
+#
+# IMPORTANT: every `services:` key below MUST be a REAL service name in
+# upstream's docker-compose.yml at the pinned SENTRY_VERSION. If you add
+# a service name that doesn't exist upstream, Compose creates a new
+# service definition with no image and fails validation ("has neither an
+# image nor a build context specified"). Upstream service names change
+# across versions — example: `worker` and `cron` were renamed to
+# `taskworker` and `taskscheduler` around tag 25. If you bump
+# SENTRY_VERSION, re-check every name here against upstream's
+# docker-compose.yml at the new tag.
 #
 # WHY not write resource limits into the upstream file directly? Upgrade
 # safety. On every `scripts/upgrade.sh`, we bump `SENTRY_VERSION` in
-# project.config, `git checkout <new-tag>` in /opt/sentry-upstream, and
+# project.config, `git checkout <new-tag>` in ~/sentry-upstream, and
 # the upstream docker-compose.yml gets REPLACED. If we'd edited it
 # in-place, our limits would vanish silently. Putting them in an override
 # file kept in OUR repo means upgrades never lose them.
@@ -25,67 +39,49 @@
 # entries there for rationale.
 # =============================================================================
 
-# We use Compose V2 syntax (no top-level `version:` field). Sentry
-# upstream's compose file targets V2 so we match.
+# Compose V2 — no top-level `version:` field.
 
 services:
 
   # --------------------------------------------------------------------------
-  # nginx — Sentry's public-facing entry point
+  # web — the Django app (Sentry UI + /api endpoints)
   # --------------------------------------------------------------------------
-  # Upstream binds this to `${SENTRY_BIND:-9000}` which defaults to all
-  # interfaces. We override it to loopback-only. Combined with rishi-3's
-  # Hetzner firewall (which blocks 9000 from the internet anyway) this is
-  # defense in depth.
-  #
-  # Caddy on rishi-1 and rishi-2 reaches this port via either the Docker
-  # Swarm `web` overlay (if we attach rishi-3's compose network to it) or
-  # via rishi-3's private Hetzner IP — the final choice is made in Phase 3.
-  nginx:
-    ports:
-      # Format: host_address:host_port:container_port
-      # 127.0.0.1 binds to loopback, NOT all interfaces.
-      - "127.0.0.1:9000:80"
-
-  # --------------------------------------------------------------------------
-  # web — the Django app
-  # --------------------------------------------------------------------------
-  # Serves the Sentry UI and the /api/ endpoints. Its memory usage grows
-  # with concurrent request count and project count. 2 GB is comfortable
-  # for < 10 projects and < 100 concurrent viewers.
   web:
     mem_limit: 2g
     mem_reservation: 512m
 
   # --------------------------------------------------------------------------
-  # worker — Celery background tasks
+  # taskworker — async task execution (replaces the old `worker` service
+  # from tag < 25; post-ingest processing like issue grouping, alert
+  # evaluation, integration webhooks)
   # --------------------------------------------------------------------------
-  # Handles post-ingest processing: issue grouping, alert evaluation,
-  # integration webhooks. Memory scales with event throughput.
-  worker:
+  taskworker:
     mem_limit: 3g
     mem_reservation: 512m
 
   # --------------------------------------------------------------------------
-  # cron — periodic jobs (digest emails, retention cleanup, etc.)
+  # taskscheduler — periodic job trigger (replaces the old `cron` service;
+  # fires digest emails, retention cleanups, etc.)
   # --------------------------------------------------------------------------
-  cron:
+  taskscheduler:
     mem_limit: 512m
 
   # --------------------------------------------------------------------------
-  # relay — event ingestion gateway
+  # taskbroker — message bus for tasks (pairs with taskworker)
   # --------------------------------------------------------------------------
-  # First stop for every incoming event. Terminates the SDK connection,
-  # does fast validation + rate limiting, then pushes to Kafka. Stateless
-  # and lightweight — 512 MB is plenty.
+  taskbroker:
+    mem_limit: 512m
+
+  # --------------------------------------------------------------------------
+  # relay — event ingestion gateway; first stop for every incoming event
+  # --------------------------------------------------------------------------
   relay:
     mem_limit: 512m
 
   # --------------------------------------------------------------------------
-  # snuba-api — query layer in front of Clickhouse
+  # snuba-api — query layer in front of Clickhouse (all issue searches,
+  # trends, performance UI hit here)
   # --------------------------------------------------------------------------
-  # Every UI query (issue search, trends, performance) goes through here.
-  # Heaviest single process after Clickhouse itself.
   snuba-api:
     mem_limit: 4g
     mem_reservation: 1g
@@ -93,9 +89,6 @@ services:
   # --------------------------------------------------------------------------
   # clickhouse — time-series storage for events + traces
   # --------------------------------------------------------------------------
-  # Memory-resident cache benefits from generous allocation but we're
-  # sharing rishi-3 with Patroni, so cap it. Monitor disk usage (see
-  # SCALING.md — this is the most likely thing to hit a disk ceiling).
   clickhouse:
     mem_limit: 4g
     mem_reservation: 1g
@@ -103,17 +96,14 @@ services:
   # --------------------------------------------------------------------------
   # kafka — event queue between relay and consumers
   # --------------------------------------------------------------------------
-  # Memory scales with partition count (we use upstream defaults) and
-  # event throughput. 2 GB is fine for our expected traffic.
   kafka:
     mem_limit: 2g
     mem_reservation: 512m
 
   # --------------------------------------------------------------------------
-  # postgres — Sentry's OWN Postgres (NOT our Patroni cluster)
+  # postgres — Sentry's OWN Postgres (NOT our Patroni cluster). Stores
+  # issue metadata, project config, user accounts.
   # --------------------------------------------------------------------------
-  # Stores issue metadata, project config, user accounts. Modest memory
-  # footprint for our scale — most heavy queries hit Clickhouse, not here.
   postgres:
     mem_limit: 2g
     mem_reservation: 512m
@@ -125,6 +115,7 @@ services:
     mem_limit: 512m
 
 # We intentionally don't cap every single service — only the load-bearing
-# ones. Upstream adds more services on every release (post-process-forwarder,
-# ingest-consumer-*, snuba-* subscribers, etc.) and chasing each would mean
-# maintenance pain. They're small processes and share the uncapped remainder.
+# ones. Upstream adds many "consumer" services (snuba-*-consumer, ingest-*,
+# subscription-consumer-*, post-process-forwarder-*) and chasing each would
+# mean maintenance pain on every release. They're small processes and share
+# the uncapped remainder.
