@@ -40,9 +40,34 @@ Read in this order — each doc builds on the previous one:
 
 **Phase 1: Pre-flight** — DONE (2026-04-21). rishi-3 confirmed capable of hosting Sentry. See `PRE-FLIGHT.md`.
 
-**Phase 2: Install Sentry on rishi-3** — not started.
+**Phase 2: Install Sentry on rishi-3** — DONE (2026-04-21). `/_health/` returns ok. Superuser creation still pending. Public URL (sentry.rishi.yral.com) requires Phase 3.
 
-Subsequent phases per plan file.
+**Phases 3–10** — not started. See `PROGRESS.md`.
+
+## Running admin commands against the Sentry stack
+
+Any one-off CLI against Sentry (create user, reset password, shell, cleanup, logs) must go through `scripts/sentry-admin.sh` — a tiny wrapper that sources `.env.custom` before calling `docker compose`. Running `docker compose run --rm web ...` directly from a fresh SSH shell will fail with `SECRET_KEY must not be empty` because the shell doesn't have `SENTRY_SYSTEM_SECRET_KEY` exported.
+
+Examples:
+
+```
+# Create a superuser
+~/yral-rishi-sentry/scripts/sentry-admin.sh run --rm web \
+    createuser --email you@gobazzinga.io --password 'hunter2' --superuser
+
+# Tail web logs
+~/yral-rishi-sentry/scripts/sentry-admin.sh logs -f web
+
+# Check status
+~/yral-rishi-sentry/scripts/sentry-admin.sh ps
+```
+
+From your Mac:
+
+```
+ssh -i ~/.ssh/rishi-hetzner-ci-key deploy@<rishi-3-ip> \
+    "~/yral-rishi-sentry/scripts/sentry-admin.sh ps"
+```
 
 ## Why a separate repo (not an instance of `yral-rishi-hetzner-infra-template`)
 
