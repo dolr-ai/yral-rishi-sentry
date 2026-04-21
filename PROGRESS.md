@@ -72,26 +72,33 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 4 — Google Workspace SSO · `[ ]`
+## Phase 4 — Google Workspace SSO · `[x]` DONE 2026-04-21
 
-- [ ] Verify `gobazzinga.io` is on Google Workspace (ask Saikat if unsure)
-- [ ] Create Google OAuth 2.0 Client ID (Web application, redirect `https://sentry.rishi.yral.com/auth/sso/`)
-- [ ] Save `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` to this repo's GitHub Secrets
-- [ ] Add `auth-google.*` to `sentry/config.yml`
-- [ ] Add `GOOGLE_DOMAIN_WHITELIST = ['gobazzinga.io']` to `sentry/sentry.config.py`
-- [ ] `docker compose restart web worker`
-- [ ] Configure in UI: Organization Settings → Auth → Google, enable "Require SSO"
-- [ ] Test: @gobazzinga.io Google account → allowed; other Google account → rejected
+- [x] Verified gobazzinga.io is on Google Workspace.
+- [x] Created Google OAuth 2.0 Client in Google Cloud Console (Web app, JS origin `https://sentry.rishi.yral.com`, redirect `https://sentry.rishi.yral.com/auth/sso/`). Later rotated once after the client secret leaked into chat context during verification — new values now live in `.env.custom` on rishi-3.
+- [x] `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET` persisted in `.env.custom` on rishi-3 via `scripts/install.sh` preserving across re-runs.
+- [x] `docker-compose.override.yml` forwards both env vars to the web service explicitly (`environment: ${VAR}` form). Upstream's `x-sentry-defaults` doesn't declare these, so without the explicit forwarding Compose was silently dropping them from the container.
+- [x] `sentry/sentry.conf.override.py` reads both from `os.environ` and assigns to `SENTRY_OPTIONS["auth-google.client-id"]` / `client-secret`. YAML config.yml does NOT interpolate `$VAR` references (multi-hour debug); Python does.
+- [x] `GOOGLE_DOMAIN_WHITELIST = ['gobazzinga.io']` enforced in sentry.conf.override.py.
+- [x] Removed `system.admin-email`, `auth.allow-registration`, `beacon.anonymous` from config.yml — Sentry's first-time setup wizard collects these and pinning them via file causes the `/api/0/internal/options/?query=is:required` save to 400. Wizard now writes them to the DB options store on first login.
+- [x] First-time setup wizard completed in browser (admin email = rishi@gobazzinga.io, allow-registration off, beacon anonymous, no CPU/RAM usage telemetry).
+- [x] Google Apps auth provider installed + configured in Sentry UI (`/settings/sentry/auth/`). Domain whitelist shows "gobazzinga.io".
+- [x] Superuser account is logged in post-configuration; SSO credentials are linked to the existing account by matching email.
+- [ ] Formal sign-out + sign-in-via-Google test deferred (will happen organically when session expires; not blocking).
 
 ---
 
-## Phase 5 — Sentry projects + DSNs · `[ ]`
+## Phase 5 — Sentry projects + DSNs · `[~]` in progress
 
-- [ ] Create org (`gobazzinga` or `dolr-ai` — confirm with Saikat)
-- [ ] Create team `rishi-services`
-- [ ] Create 4 projects: `yral-chat-ai`, `yral-rishi-hetzner-infra-template`, `yral-hello-world-rishi`, `yral-hello-world-counter`
-- [ ] Copy each DSN; store in the corresponding repo's GitHub Secrets as `SENTRY_DSN`
-- [ ] Configure alert rule per project (email to rishi@gobazzinga.io on new unresolved issue)
+- [x] Default organization `sentry` already exists (created by the setup wizard). Saikat may want to rename to `gobazzinga` or `dolr-ai` later — deferred, slug rename is a supported Sentry operation (non-destructive).
+- [ ] Create team `rishi-services` (Sentry UI → Settings → Teams → Create Team)
+- [ ] Create 4 projects in the `sentry` org, all on the Python platform, assigned to `rishi-services`:
+      - `yral-chat-ai`
+      - `yral-rishi-hetzner-infra-template`
+      - `yral-hello-world-rishi`
+      - `yral-hello-world-counter`
+- [ ] Per project: copy the DSN from Settings → Client Keys (DSN). Store in the target service's GitHub repo as secret `SENTRY_DSN` (replacing the existing apm.yral.com value). Done interactively by Rishi so secrets never pass through Claude.
+- [ ] Per project: configure a default alert rule — "Send email to rishi@gobazzinga.io when a new issue is first seen." Sentry scaffolds one by default on project creation; verify or adjust.
 
 ---
 
