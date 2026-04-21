@@ -1,0 +1,32 @@
+# =====================================================================
+# Caddy overlay attachment — one-off warning for infrequently-deploying services
+# =====================================================================
+#
+# PURPOSE: warn the operator that Caddy's attachment to this service's
+# overlay network (<PROJECT_REPO>-db-internal) is a RUNTIME property and
+# will be lost if the Caddy container ever restarts (reboot, image
+# upgrade). scripts/ci/deploy-app.sh re-runs `docker network connect`
+# on every push-to-main deploy, so services that push frequently never
+# notice this. Services that deploy rarely (e.g. a self-hosted
+# auxiliary service that upgrades monthly) CAN notice — at which point
+# the affected domain returns 502 until someone manually reconnects.
+#
+# This message is NOT a bug; it's documenting the status-quo architecture.
+# See RUNBOOK.md "Caddy lost overlay attachment" for the 30-second fix.
+# The permanent fix (migrate Caddy to a Swarm stack with declared
+# networks) is tracked separately.
+echo
+echo -e "${Y} ⚠  Caddy overlay attachment is runtime-only${N}"
+echo
+echo "   Every deploy via deploy-app.sh re-runs 'docker network connect"
+echo "   ${PROJECT_REPO}-db-internal caddy' on rishi-1 + rishi-2. Services that"
+echo "   push to main frequently are unaffected. If this service will deploy"
+echo "   infrequently (e.g. only on manual upgrade), consider adding a"
+echo "   systemd-based reconnect hook on rishi-1/rishi-2 like"
+echo "   yral-rishi-sentry does in its systemd/ + scripts/bootstrap-caddy-reconnect.sh."
+echo
+echo "   Recovery after a Caddy restart (any service): on the affected host,"
+echo "   'docker network connect ${PROJECT_REPO}-db-internal caddy'. No Caddy"
+echo "   reload needed."
+echo
+echo "   See RUNBOOK.md section 'Caddy lost overlay attachment' for detail."

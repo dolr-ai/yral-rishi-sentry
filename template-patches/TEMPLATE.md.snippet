@@ -1,0 +1,11 @@
+- ✅ Caddy running on rishi-1 and rishi-2 as a standalone `docker run` container.
+  **Caveat — known architectural gap (see RUNBOOK "Caddy lost overlay attachment"):**
+  Caddy's attachment to per-service Swarm overlay networks (`<name>-db-internal`)
+  is a *runtime* property that does NOT persist across Caddy container restarts.
+  This template hides the gap by re-running `docker network connect` inside
+  `scripts/ci/deploy-app.sh` on every push-to-main deploy (lines ~299–302).
+  Services that deploy infrequently (e.g. `yral-rishi-sentry`, which upgrades
+  monthly at most) are at higher risk of 502s after a Caddy reboot until the
+  deploy script runs again. Those services install their own systemd-based
+  reconnect hook. The permanent fix is migrating Caddy to a Swarm stack with
+  declarative `networks:` entries — tracked separately.

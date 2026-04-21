@@ -1,0 +1,27 @@
+## Caddy lost overlay attachment
+
+**Symptoms:** a specific domain (e.g. `chat-ai.rishi.yral.com`, `sentry.rishi.yral.com`) returns 502 or a Cloudflare "Web server is down" error from one OR both of rishi-1/rishi-2, while other domains served by the same Caddy are fine. Usually happens after a Caddy container restart (reboot, manual restart, image upgrade).
+
+**Cause:** Caddy's attachment to per-service Swarm overlay networks (`<service>-db-internal`, or custom overlays like `sentry-web`) is a runtime property set by `docker network connect`. When the Caddy container restarts, it comes back on only the networks declared when the container was originally created — typically just the `web` local bridge. All overlay attachments are lost. Caddy then can't resolve upstream container names over the overlay and returns 502 for those domains.
+
+**How the template's other services mask this:** `scripts/ci/deploy-app.sh` calls `docker network connect <overlay> caddy` on every push-to-main deploy (search for "attaching caddy container to overlay" in that file). Services that deploy frequently hide the gap; services that deploy infrequently expose it.
+
+**How to confirm:** on the affected host (rishi-1 or rishi-2):
+```bash
+docker inspect caddy --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+```
+The expected overlays for the broken service should be listed. If not, the attachment has been lost.
+
+**Recovery (30 seconds):**
+```bash
+# On the affected host only:
+docker network connect <overlay-name> caddy
+# e.g.:
+docker network connect chat-ai-db-internal caddy
+docker network connect sentry-web caddy
+```
+No Caddy reload needed — Caddy re-resolves upstreams on the next request.
+
+**Permanent prevention for a specific service:** install a systemd unit on rishi-1/rishi-2 that runs `docker network connect <overlay> caddy` on boot after `docker.service`. See `yral-rishi-sentry/systemd/sentry-caddy-reconnect.service` and `yral-rishi-sentry/scripts/bootstrap-caddy-reconnect.sh` for a concrete example.
+
+**Permanent prevention for the whole cluster (out of scope for this template today):** migrate Caddy from a standalone `docker run` to a Swarm stack with declarative `networks:` entries. Swarm would then restore attachments on every container reconciliation. Tracked as a follow-up.
