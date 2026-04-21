@@ -20,17 +20,24 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `[-]` skipped / 
 
 ## Phase 2 — Install Sentry on rishi-3 · `[~]` IN PROGRESS
 
+**Local scaffolding — DONE**
 - [x] Create local repo at `~/Claude Projects/yral-rishi-sentry/`
 - [x] Pin `SENTRY_VERSION=26.4.0` in `project.config`
 - [x] Create GitHub repo `dolr-ai/yral-rishi-sentry` (live at https://github.com/dolr-ai/yral-rishi-sentry, public)
-- [ ] Set GitHub Secret `SENTRY_HOST_IP` on this repo (rishi-3's public IP — not stored in code, see project.config commentary)
-- [ ] SSH to rishi-3, clone `getsentry/self-hosted` to `/opt/sentry-upstream`, checkout tag `26.4.0`
-- [ ] Write `docker-compose.override.yml` (resource limits + volume paths + loopback bind)
-- [ ] Write `sentry/config.yml` (url-prefix + allow-registration: false, SSO stub)
-- [ ] Run upstream `./install.sh --skip-user-prompt`
-- [ ] Create superadmin user (`createuser --superuser`) — Rishi's email, strong password
-- [ ] `docker compose up -d`
-- [ ] Verify `curl http://127.0.0.1:9000/_health/` returns `ok` on rishi-3
+- [x] `docker-compose.override.yml` — loopback bind, resource limits on 9 heaviest services
+- [x] `sentry/config.yml` — URL prefix, `auth.allow-registration: false`, Google OAuth env-var placeholders, mail=dummy
+- [x] `sentry/sentry.conf.override.py` — `GOOGLE_DOMAIN_WHITELIST = ['gobazzinga.io']` + session hardening
+- [x] `scripts/install.sh` — idempotent bootstrap; places our overrides, runs upstream install.sh, verifies `/_health/`
+- [x] `scripts/upgrade.sh` — changelog-gated, dry-run-first upgrade with pre-upgrade backup hook
+
+**On-rishi-3 steps — not started (requires explicit go-ahead before touching shared infra)**
+- [ ] Set GitHub Secrets `SENTRY_HOST_IP`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` on this repo
+- [ ] Google Cloud Console: create OAuth 2.0 Client ID (deferred — Phase 4 can be done after Phase 2 install; install.sh will still run with placeholder values, SSO just won't work until then)
+- [ ] SSH to rishi-3, `sudo mkdir -p /opt/sentry-upstream && sudo chown deploy:deploy /opt/sentry-upstream`
+- [ ] `git clone` this repo to rishi-3 `~/yral-rishi-sentry`
+- [ ] Run `scripts/install.sh` on rishi-3 (~20–40 min first-time)
+- [ ] `docker compose run --rm web createuser --email rishi@gobazzinga.io --password '<strong>' --superuser`
+- [ ] Verify `curl http://127.0.0.1:9000/_health/` returns `ok`
 
 **Gate to Phase 3:** `/_health/` = ok from inside rishi-3.
 

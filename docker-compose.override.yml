@@ -1,0 +1,130 @@
+# =============================================================================
+# yral-rishi-sentry — Docker Compose override
+# =============================================================================
+#
+# Docker Compose auto-merges a file named `docker-compose.override.yml` on
+# top of `docker-compose.yml` (they live side-by-side in
+# /opt/sentry-upstream/ on rishi-3). `scripts/install.sh` symlinks THIS
+# file into that location so our overrides apply without modifying the
+# upstream file (which we'd have to reconcile on every Sentry upgrade).
+#
+# What this file does:
+#   1. Binds Sentry's public nginx port to 127.0.0.1 only, so the only
+#      way in from the internet is via Caddy on rishi-1/rishi-2.
+#   2. Caps RAM for the heaviest services so Sentry can't OOM the
+#      Patroni follower and etcd node sharing this host.
+#
+# WHY not write resource limits into the upstream file directly? Upgrade
+# safety. On every `scripts/upgrade.sh`, we bump `SENTRY_VERSION` in
+# project.config, `git checkout <new-tag>` in /opt/sentry-upstream, and
+# the upstream docker-compose.yml gets REPLACED. If we'd edited it
+# in-place, our limits would vanish silently. Putting them in an override
+# file kept in OUR repo means upgrades never lose them.
+#
+# Values for memory caps come from project.config — see SENTRY_*_MEM
+# entries there for rationale.
+# =============================================================================
+
+# We use Compose V2 syntax (no top-level `version:` field). Sentry
+# upstream's compose file targets V2 so we match.
+
+services:
+
+  # --------------------------------------------------------------------------
+  # nginx — Sentry's public-facing entry point
+  # --------------------------------------------------------------------------
+  # Upstream binds this to `${SENTRY_BIND:-9000}` which defaults to all
+  # interfaces. We override it to loopback-only. Combined with rishi-3's
+  # Hetzner firewall (which blocks 9000 from the internet anyway) this is
+  # defense in depth.
+  #
+  # Caddy on rishi-1 and rishi-2 reaches this port via either the Docker
+  # Swarm `web` overlay (if we attach rishi-3's compose network to it) or
+  # via rishi-3's private Hetzner IP — the final choice is made in Phase 3.
+  nginx:
+    ports:
+      # Format: host_address:host_port:container_port
+      # 127.0.0.1 binds to loopback, NOT all interfaces.
+      - "127.0.0.1:9000:80"
+
+  # --------------------------------------------------------------------------
+  # web — the Django app
+  # --------------------------------------------------------------------------
+  # Serves the Sentry UI and the /api/ endpoints. Its memory usage grows
+  # with concurrent request count and project count. 2 GB is comfortable
+  # for < 10 projects and < 100 concurrent viewers.
+  web:
+    mem_limit: 2g
+    mem_reservation: 512m
+
+  # --------------------------------------------------------------------------
+  # worker — Celery background tasks
+  # --------------------------------------------------------------------------
+  # Handles post-ingest processing: issue grouping, alert evaluation,
+  # integration webhooks. Memory scales with event throughput.
+  worker:
+    mem_limit: 3g
+    mem_reservation: 512m
+
+  # --------------------------------------------------------------------------
+  # cron — periodic jobs (digest emails, retention cleanup, etc.)
+  # --------------------------------------------------------------------------
+  cron:
+    mem_limit: 512m
+
+  # --------------------------------------------------------------------------
+  # relay — event ingestion gateway
+  # --------------------------------------------------------------------------
+  # First stop for every incoming event. Terminates the SDK connection,
+  # does fast validation + rate limiting, then pushes to Kafka. Stateless
+  # and lightweight — 512 MB is plenty.
+  relay:
+    mem_limit: 512m
+
+  # --------------------------------------------------------------------------
+  # snuba-api — query layer in front of Clickhouse
+  # --------------------------------------------------------------------------
+  # Every UI query (issue search, trends, performance) goes through here.
+  # Heaviest single process after Clickhouse itself.
+  snuba-api:
+    mem_limit: 4g
+    mem_reservation: 1g
+
+  # --------------------------------------------------------------------------
+  # clickhouse — time-series storage for events + traces
+  # --------------------------------------------------------------------------
+  # Memory-resident cache benefits from generous allocation but we're
+  # sharing rishi-3 with Patroni, so cap it. Monitor disk usage (see
+  # SCALING.md — this is the most likely thing to hit a disk ceiling).
+  clickhouse:
+    mem_limit: 4g
+    mem_reservation: 1g
+
+  # --------------------------------------------------------------------------
+  # kafka — event queue between relay and consumers
+  # --------------------------------------------------------------------------
+  # Memory scales with partition count (we use upstream defaults) and
+  # event throughput. 2 GB is fine for our expected traffic.
+  kafka:
+    mem_limit: 2g
+    mem_reservation: 512m
+
+  # --------------------------------------------------------------------------
+  # postgres — Sentry's OWN Postgres (NOT our Patroni cluster)
+  # --------------------------------------------------------------------------
+  # Stores issue metadata, project config, user accounts. Modest memory
+  # footprint for our scale — most heavy queries hit Clickhouse, not here.
+  postgres:
+    mem_limit: 2g
+    mem_reservation: 512m
+
+  # --------------------------------------------------------------------------
+  # redis — cache + rate-limiter state
+  # --------------------------------------------------------------------------
+  redis:
+    mem_limit: 512m
+
+# We intentionally don't cap every single service — only the load-bearing
+# ones. Upstream adds more services on every release (post-process-forwarder,
+# ingest-consumer-*, snuba-* subscribers, etc.) and chasing each would mean
+# maintenance pain. They're small processes and share the uncapped remainder.
