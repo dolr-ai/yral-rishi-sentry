@@ -10,7 +10,9 @@ Sentry is reverse-proxied by Caddy on rishi-1 and rishi-2. Caddy reaches Sentry'
 
 ### What we've done to mitigate
 
-On each of rishi-1 and rishi-2, a systemd unit `sentry-caddy-reconnect.service` fires on boot (after `docker.service`), waits 30 s for Caddy to come up, and then runs `/home/deploy/caddy-reconnect.sh` which idempotently calls `docker network connect sentry-web caddy`. Installed by `scripts/bootstrap-caddy-reconnect.sh` (one-time setup from an operator's laptop).
+On each of rishi-1 and rishi-2, a `@reboot` entry in the deploy user's crontab runs `/home/deploy/caddy-reconnect.sh` on every boot. The script waits up to 3 minutes for Docker + the caddy container to come up, then idempotently calls `docker network connect sentry-web caddy`. Installed by `scripts/bootstrap-caddy-reconnect.sh` (one-time setup from an operator's laptop).
+
+WHY cron @reboot instead of systemd? Installing a system-wide systemd unit requires root. The deploy user on rishi-1/rishi-2 does not have passwordless sudo (only Saikat holds the sudo password). cron @reboot is the well-worn Linux equivalent that runs under the user's own identity with no privilege escalation. A (currently unused) systemd unit file `systemd/sentry-caddy-reconnect.service` is kept in the repo as a ready-to-go alternative if this host ever gains passwordless sudo.
 
 ### What's still NOT covered
 

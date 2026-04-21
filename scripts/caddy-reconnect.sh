@@ -47,6 +47,25 @@ NETWORK="${SENTRY_OVERLAY_NETWORK:-sentry-web}"
 CONTAINER="${SENTRY_CADDY_CONTAINER:-caddy}"
 
 # -----------------------------------------------------------------------------
+# Boot-time wait: if this script fires via crontab @reboot, Docker and the
+# Caddy container might not be up yet. cron fires when the `cron` service
+# starts, which is NOT strictly ordered after `docker.service`.
+#
+# We wait up to 3 minutes (36 * 5s) for Docker's socket to be reachable,
+# the network to exist, AND the caddy container to be running. If the wait
+# times out, the preflight below will produce a clean error and cron will
+# log it to /home/deploy/caddy-reconnect.log.
+# -----------------------------------------------------------------------------
+for i in $(seq 1 36); do
+  if docker ps >/dev/null 2>&1 \
+       && docker network inspect "$NETWORK" >/dev/null 2>&1 \
+       && docker inspect "$CONTAINER" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 5
+done
+
+# -----------------------------------------------------------------------------
 # Preflight: network must exist, container must be running.
 # -----------------------------------------------------------------------------
 

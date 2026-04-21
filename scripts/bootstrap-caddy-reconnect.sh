@@ -6,43 +6,50 @@
 # WHAT THIS SCRIPT DOES (one-time setup, run from Rishi's Mac):
 #
 # For each host in the list (rishi-1 + rishi-2):
-#   1. scp caddy-reconnect.sh          → /home/deploy/caddy-reconnect.sh
-#   2. scp sentry-caddy-reconnect.service → /tmp/ on the host
-#   3. SSH in and interactively prompt for sudo to:
-#        - Move the .service file to /etc/systemd/system/
-#        - systemctl daemon-reload
-#        - systemctl enable sentry-caddy-reconnect.service
-#        - systemctl start sentry-caddy-reconnect.service
-#        - Verify it ran successfully and Caddy is attached to sentry-web
+#   1. scp caddy-reconnect.sh → /home/deploy/caddy-reconnect.sh
+#   2. Install an `@reboot` entry in the deploy user's own crontab that
+#      runs caddy-reconnect.sh on every boot. (Via crontab, not systemd,
+#      because deploy doesn't have passwordless sudo on these hosts.)
+#   3. Run caddy-reconnect.sh once to reconcile current state.
 #
-# WHY THIS IS A SEPARATE SCRIPT (not part of install.sh):
+# WHY CRON NOT SYSTEMD:
 #
-# scripts/install.sh runs ON rishi-3 and touches only rishi-3. Caddy lives
-# on rishi-1 and rishi-2, which install.sh doesn't reach. This bootstrap
-# script runs on your laptop and SSHs outward.
+# Installing a system-wide systemd unit under /etc/systemd/system/
+# requires root access. The deploy user on rishi-1/rishi-2 does NOT
+# have passwordless sudo (only Saikat holds the sudo password). An
+# earlier version of this script tried sudo and locked Rishi out of
+# running the bootstrap at all.
 #
-# WHEN YOU NEED TO RE-RUN IT:
+# cron @reboot is the well-worn Linux equivalent: it runs arbitrary
+# commands at boot under the user's own identity, with no elevated
+# privileges needed. cron is installed by default on Ubuntu 24.04.
+# caddy-reconnect.sh itself runs `docker network connect` which needs
+# access to the Docker socket; the deploy user is already in the
+# `docker` group (since that's how services deploy), so that works.
 #
-# - Once, after the initial Phase 3 deploy (this install).
-# - If caddy-reconnect.sh or sentry-caddy-reconnect.service changes in
-#   this repo and you want the new versions on the hosts.
-# - If rishi-1 or rishi-2 is replaced/reimaged.
-# - If for any reason the systemd unit is removed or disabled.
+# Limitation: cron @reboot fires when the `cron` service starts, which
+# is not strictly ordered after `docker.service`. caddy-reconnect.sh
+# handles this by waiting up to 3 minutes for Docker + the caddy
+# container to be up before attempting the reconnect.
 #
-# SAFETY:
-#
-# - All operations on the remote hosts are idempotent or guarded:
-#     systemctl enable/start on an already-enabled/running service is OK.
-#     The caddy-reconnect.sh is itself a no-op if already attached.
-# - sudo will prompt interactively on each host — your password is never
-#   passed on the command line.
-# - The script aborts on first error (set -e), so a failure on rishi-1
-#   does NOT silently leave rishi-2 half-configured.
+# WHEN TO RE-RUN THIS SCRIPT:
+#   - Once, after the initial Phase 3 deploy.
+#   - If caddy-reconnect.sh changes in this repo and you want the new
+#     version on the hosts.
+#   - If rishi-1 or rishi-2 is replaced/reimaged.
+#   - If the crontab entry is removed or the script is deleted.
 #
 # USAGE:
 #
 #   bash scripts/bootstrap-caddy-reconnect.sh
 #
+# SAFETY:
+#
+# - No sudo. No root. Operates entirely within the deploy user's scope.
+# - Idempotent: scp overwrites the same path, crontab installation checks
+#   for an existing entry and avoids duplicates.
+# - `set -e` aborts on first error, so a failure on rishi-1 does NOT
+#   silently leave rishi-2 half-configured.
 # =============================================================================
 
 set -euo pipefail
@@ -51,11 +58,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Hosts we need to configure. Pulled from the same servers.config convention
-# the infra-template uses, but we hard-code here for two reasons:
-#   1. yral-rishi-sentry's infra is tiny (just rishi-1 + rishi-2 for Caddy)
-#      so an external config file is overkill.
-#   2. If rishi-1 or rishi-2 moves to a new IP, the SSH resolution should
-#      be handled via ~/.ssh/config, not via our repo.
+# the infra-template uses, but hard-coded here because:
+#   1. yral-rishi-sentry's cluster surface is tiny (rishi-1 + rishi-2 for
+#      Caddy; rishi-3 already handled by install.sh).
+#   2. If host IPs change, SSH should be resolved via ~/.ssh/config, not
+#      the repo.
 HOSTS=(
   "deploy@138.201.137.181"   # rishi-1
   "deploy@136.243.150.84"    # rishi-2
@@ -65,15 +72,22 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/rishi-hetzner-ci-key}"
 SSH_OPTS=(-i "$SSH_KEY" -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
 
 LOCAL_SCRIPT="${REPO_DIR}/scripts/caddy-reconnect.sh"
-LOCAL_UNIT="${REPO_DIR}/systemd/sentry-caddy-reconnect.service"
 
-# Sanity checks before we touch any remote host.
+# Unique marker string used to idempotently add/remove our crontab entry.
+# We grep for this marker to detect an existing install, and appended ONLY
+# if missing. Edit-safe: if we ever change the body of the crontab entry,
+# grep for this exact marker + replace the line in-place.
+CRON_MARKER="# yral-rishi-sentry: re-attach caddy to sentry-web overlay on boot"
+
+# The actual crontab line. A 30-second sleep before calling the script is
+# belt-and-braces on top of the script's own internal wait loop: @reboot
+# jobs can fire quite early in boot. Output is appended to a log file the
+# deploy user can tail: `tail -f /home/deploy/caddy-reconnect.log`.
+CRON_LINE="@reboot sleep 30 && /home/deploy/caddy-reconnect.sh >> /home/deploy/caddy-reconnect.log 2>&1"
+
+# Preflight on the operator's laptop.
 if [[ ! -f "$LOCAL_SCRIPT" ]]; then
   echo "ERROR: $LOCAL_SCRIPT not found. Run from repo root." >&2
-  exit 1
-fi
-if [[ ! -f "$LOCAL_UNIT" ]]; then
-  echo "ERROR: $LOCAL_UNIT not found. Run from repo root." >&2
   exit 1
 fi
 if [[ ! -f "$SSH_KEY" ]]; then
@@ -83,7 +97,7 @@ fi
 
 echo "==> Bootstrapping Caddy auto-reconnect on ${#HOSTS[@]} hosts"
 echo "    script : $LOCAL_SCRIPT"
-echo "    unit   : $LOCAL_UNIT"
+echo "    method : cron @reboot (no sudo required)"
 echo "    key    : $SSH_KEY"
 echo ""
 
@@ -93,58 +107,62 @@ for host in "${HOSTS[@]}"; do
   echo "────────────────────────────────────────────────────────────────"
 
   # Step 1 — copy the reconnect script to the deploy user's home.
-  echo "  [1/5] scp caddy-reconnect.sh → /home/deploy/"
+  echo "  [1/4] scp caddy-reconnect.sh → /home/deploy/"
   scp "${SSH_OPTS[@]}" "$LOCAL_SCRIPT" "${host}:/home/deploy/caddy-reconnect.sh"
   # Make sure it's executable — scp preserves mode but defense-in-depth.
   ssh "${SSH_OPTS[@]}" "$host" "chmod +x /home/deploy/caddy-reconnect.sh"
 
-  # Step 2 — copy the systemd unit to /tmp. We can't scp directly to
-  # /etc/systemd/system/ because that requires root; use /tmp as a staging
-  # dir and move with sudo.
-  echo "  [2/5] scp sentry-caddy-reconnect.service → /tmp/"
-  scp "${SSH_OPTS[@]}" "$LOCAL_UNIT" "${host}:/tmp/sentry-caddy-reconnect.service"
-
-  # Step 3 — move the unit into place and reload systemd. This is the
-  # ONLY sudo call; it'll prompt interactively for the deploy user's
-  # password on each host (which is correct — it should).
-  echo "  [3/5] sudo mv + systemctl daemon-reload (password prompt incoming)"
+  # Step 2 — idempotently install the crontab entry.
+  # Reads current crontab (ignoring exit code 1 from `crontab -l` when the
+  # user has no crontab yet), greps for our marker, and writes back only if
+  # the marker is missing. The marker + the exact line are both emitted.
+  echo "  [2/4] install crontab @reboot entry (idempotent)"
   # shellcheck disable=SC2029
-  ssh -t "${SSH_OPTS[@]}" "$host" "
-    sudo mv /tmp/sentry-caddy-reconnect.service /etc/systemd/system/sentry-caddy-reconnect.service &&
-    sudo chown root:root /etc/systemd/system/sentry-caddy-reconnect.service &&
-    sudo chmod 644 /etc/systemd/system/sentry-caddy-reconnect.service &&
-    sudo systemctl daemon-reload
-  "
+  ssh "${SSH_OPTS[@]}" "$host" bash -s <<REMOTE_BOOTSTRAP
+    set -euo pipefail
+    marker='${CRON_MARKER}'
+    line='${CRON_LINE}'
+    existing=\$(crontab -l 2>/dev/null || true)
+    if printf '%s\n' "\${existing}" | grep -qxF "\${marker}"; then
+      echo '    (marker already present; leaving crontab unchanged)'
+    else
+      echo '    (adding marker + @reboot line to crontab)'
+      {
+        # Preserve any existing crontab content unchanged…
+        printf '%s\n' "\${existing}"
+        # …then append our marker + line.
+        printf '%s\n' "\${marker}"
+        printf '%s\n' "\${line}"
+      } | crontab -
+    fi
+REMOTE_BOOTSTRAP
 
-  # Step 4 — enable + start the unit. Enabling makes it fire on boot;
-  # starting makes it fire right now, reconciling the current state.
-  echo "  [4/5] systemctl enable + start sentry-caddy-reconnect"
+  # Step 3 — run caddy-reconnect.sh once right now, to reconcile the
+  # current runtime state. Without this, the fix only takes effect on
+  # the next reboot. Idempotent: no-op if caddy is already attached.
+  echo "  [3/4] running caddy-reconnect.sh once to reconcile current state"
   # shellcheck disable=SC2029
-  ssh -t "${SSH_OPTS[@]}" "$host" "
-    sudo systemctl enable sentry-caddy-reconnect.service &&
-    sudo systemctl start sentry-caddy-reconnect.service
-  "
+  ssh "${SSH_OPTS[@]}" "$host" "/home/deploy/caddy-reconnect.sh"
 
-  # Step 5 — verify. Read back the last few log lines and the current
-  # Caddy attachment state, so a failure is visible immediately.
-  echo "  [5/5] verify"
+  # Step 4 — verify the crontab entry is there and caddy IS attached
+  # to sentry-web. Print both so a failure is visible immediately.
+  echo "  [4/4] verify"
   # shellcheck disable=SC2029
-  ssh "${SSH_OPTS[@]}" "$host" "
-    echo '    --- sentry-caddy-reconnect status ---' &&
-    systemctl is-active sentry-caddy-reconnect.service &&
-    echo '    --- last 10 log lines ---' &&
-    journalctl -u sentry-caddy-reconnect.service --no-pager -n 10 &&
-    echo '    --- caddy attached networks ---' &&
-    docker inspect caddy --format '{{range \$k, \$v := .NetworkSettings.Networks}}{{\$k}} {{end}}'
-  "
+  ssh "${SSH_OPTS[@]}" "$host" bash -s <<'REMOTE_VERIFY'
+    echo '    --- crontab entry for yral-rishi-sentry ---'
+    crontab -l 2>/dev/null | grep -A1 -F 'yral-rishi-sentry' || echo '    (NOT FOUND — bug in install step)'
+    echo '    --- caddy currently attached to these networks: ---'
+    docker inspect caddy --format '    {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+REMOTE_VERIFY
 
   echo ""
 done
 
 echo "================================================================"
 echo "DONE. Both hosts are now configured to re-attach Caddy to"
-echo "sentry-web automatically on boot."
+echo "sentry-web automatically on boot, via cron @reboot."
 echo ""
-echo "To verify on a future boot: systemctl status sentry-caddy-reconnect"
+echo "To verify on a future boot: SSH in and run 'crontab -l'"
+echo "Runtime logs: tail -f /home/deploy/caddy-reconnect.log"
 echo "To manually re-run: /home/deploy/caddy-reconnect.sh (on the host)"
 echo "================================================================"
