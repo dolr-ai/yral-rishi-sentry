@@ -1,0 +1,69 @@
+# =============================================================================
+# sentry-caddy-reconnect.service — reattach Caddy to sentry-web on boot
+# =============================================================================
+#
+# WHERE THIS FILE GOES:
+#   /etc/systemd/system/sentry-caddy-reconnect.service on rishi-1 AND rishi-2.
+#   Installed by scripts/bootstrap-caddy-reconnect.sh.
+#
+# WHAT IT DOES:
+#   On boot, after docker.service is ready, wait 30 seconds for the Caddy
+#   container to actually come up, then run /home/deploy/caddy-reconnect.sh
+#   which idempotently reconnects Caddy to the sentry-web Swarm overlay.
+#   Without this unit, sentry.rishi.yral.com returns 502 from a freshly-
+#   booted rishi-1/rishi-2 until someone manually runs the reconnect script.
+#
+# WHAT IT DOES NOT HANDLE:
+#   An ad-hoc Caddy restart WHILE the host is up (e.g. `docker restart
+#   caddy`, a cluster-wide Caddy image update). systemd only fires this
+#   unit on boot. For ad-hoc restarts, run the reconnect script manually
+#   on the affected host — see yral-rishi-sentry/RUNBOOK.md.
+#
+# WHY 30 s sleep:
+#   docker.service reports Ready before the Caddy container is actually
+#   started by Docker's `restart: always` policy. 30 s is empirically
+#   enough for Caddy to be up on a healthy rishi-1/2. If the sleep is
+#   too short, `caddy-reconnect.sh` aborts with "container not running"
+#   and leaves the reconnect un-done until the next boot or manual run.
+# =============================================================================
+
+[Unit]
+# Human-readable description shown in `systemctl status`.
+Description=Reconnect Caddy to sentry-web overlay after boot
+# Order this unit AFTER docker.service so Docker is up before we run.
+# `Requires` means "fail this unit if docker.service failed."
+After=docker.service
+Requires=docker.service
+# Cap how often systemd will retry if this unit fails, so a persistent
+# failure doesn't spin in a restart loop.
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+# Type=oneshot + RemainAfterExit=yes is the canonical idiom for "run this
+# once on boot, then be considered 'running' for the rest of the session."
+# Without RemainAfterExit=yes, systemd would mark the service as failed
+# as soon as ExecStart exits (even successfully), which looks noisy in
+# `systemctl status`.
+Type=oneshot
+RemainAfterExit=yes
+# Run as the deploy user. deploy is a member of the docker group so it
+# can run `docker network connect` without sudo. Running as root would
+# also work but is unnecessary privilege — follow principle of least
+# privilege.
+User=deploy
+# Wait for Caddy to actually start (see "WHY 30 s sleep" at the top).
+ExecStartPre=/bin/sleep 30
+# The actual work. /home/deploy/caddy-reconnect.sh is installed by
+# scripts/bootstrap-caddy-reconnect.sh and owned by deploy.
+ExecStart=/home/deploy/caddy-reconnect.sh
+# Send stdout/stderr to journald so we can retrieve it later via
+# `journalctl -u sentry-caddy-reconnect`.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+# "Install under multi-user.target" means this unit is enabled for
+# normal boot (not just graphical.target). That's what you want on a
+# headless server.
+WantedBy=multi-user.target

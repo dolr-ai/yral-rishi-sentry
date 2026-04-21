@@ -55,14 +55,20 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 3 — Caddy reverse proxy + TLS · `[ ]`
+## Phase 3 — Caddy reverse proxy + TLS · `[x]` DONE 2026-04-21
 
-- [ ] Write `/home/deploy/caddy/conf.d/sentry.caddy` on rishi-1
-- [ ] Mirror on rishi-2
-- [ ] Confirm rishi-1 Caddy can reach `rishi-3:9000` (network path decision)
-- [ ] Confirm Cloudflare DNS covers `sentry.rishi.yral.com` via the `*.rishi.yral.com` wildcard; add explicit record if not
-- [ ] `systemctl reload caddy` on both hosts
-- [ ] Browser test: `https://sentry.rishi.yral.com` shows Sentry login page
+- [x] Recon: established that `web` on rishi-1 is a LOCAL bridge (not overlay) — cross-host cluster routing for existing services uses per-service Swarm overlays (`chat-ai-db-internal`, `rishi-hetzner-infra-template-db-internal`).
+- [x] Created new attachable Swarm overlay `sentry-web` on rishi-1 (Swarm manager).
+- [x] Updated `docker-compose.override.yml` to declare `sentry-web` as external and attach Sentry's nginx to it (alongside its default compose network). Recreated nginx; confirmed dual-network attach.
+- [x] `docker network connect sentry-web caddy` on rishi-1 AND rishi-2. Connectivity test from inside both Caddy containers to `http://sentry-self-hosted-nginx-1/_health/` returns `ok`.
+- [x] DNS verified — wildcard `*.rishi.yral.com` already resolves `sentry.rishi.yral.com` → Cloudflare.
+- [x] Wrote `/home/deploy/caddy/conf.d/sentry.caddy` on rishi-1 AND rishi-2 (single-upstream since Sentry is one-host-only; tls internal; standard security headers minus CSP since Sentry UI needs inline scripts).
+- [x] Validated Caddy config + reloaded on both hosts (pre-existing `Unnecessary header_up` warnings are cluster-wide stylistic, not blocking).
+- [x] Browser test: `curl -I https://sentry.rishi.yral.com/` returns HTTP/2 302 → `/auth/login/` with `via: 1.1 Caddy`; `/_health/` returns `ok` via HTTPS.
+- [x] **Persistence fix (post-deploy):** wrote `scripts/caddy-reconnect.sh`, `systemd/sentry-caddy-reconnect.service`, `scripts/bootstrap-caddy-reconnect.sh` to re-attach Caddy to `sentry-web` on boot. Mirrors the template's `deploy-app.sh:299-302` idempotent-attach pattern but fires on every boot, not only on service deploys.
+- [ ] Run `scripts/bootstrap-caddy-reconnect.sh` once to install the systemd unit on rishi-1 + rishi-2 (Rishi's action — needs sudo, so interactive).
+
+**Known issue:** ad-hoc Caddy restarts while the host is up (not boot-time) still need a manual `/home/deploy/caddy-reconnect.sh` run on the affected host. Root-cause fix is migrating Caddy itself to a Swarm stack — out of our Sentry scope, filed as a follow-up for the template below.
 
 ---
 
@@ -145,3 +151,11 @@ For future reference — each of these is now baked into the install.sh in a way
 2. Is `gobazzinga.io` on Google Workspace? (Phase 4 blocker)
 3. SMTP relay for Sentry email alerts, or UI-only? (Phase 9, non-blocking)
 4. Delete old Sentry projects on apm.yral.com after cutover, or keep indefinitely? (Phase 7, non-blocking)
+
+## Follow-up items for other repos (not yral-rishi-sentry scope)
+
+1. **Template repo — move Caddy from standalone `docker run` to a Swarm stack with declarative `networks:` entries.** Root-cause fix for the "docker network connect is runtime-only" gap that currently affects every service in the cluster (they mask it by re-running deploy-app.sh on every push; Sentry exposed it because Sentry deploys rarely). Assignee: Saikat. Estimated scope: ~1 day. Affects ALL tenants, needs a maintenance window.
+
+2. **Template repo — add `caddy-reconnect` pattern to `scripts/new-service.sh`'s output message** so new services created from the template know Caddy attachment is runtime-only until #1 is done. Tracked in Phase 8 of this project.
+
+3. **Template repo — add a "Caddy restarted unexpectedly" playbook to the template's `RUNBOOK.md`.** Same learning from Phase 3 of this project. Tracked in Phase 8.
