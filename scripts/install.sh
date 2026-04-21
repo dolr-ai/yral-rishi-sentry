@@ -189,7 +189,27 @@ chmod 600 "${ENV_CUSTOM}"
 # -----------------------------------------------------------------------------
 echo "==> Running upstream install.sh (this takes 20-40 min on first run)"
 cd "${SENTRY_UPSTREAM_DIR}"
-./install.sh --skip-user-prompt
+# Three flags needed for a fully non-interactive install (all three verified
+# against upstream install/parse-cli.sh at tag 26.4.0):
+#   --skip-user-creation           skip the "create first admin user" prompt.
+#                                  We'll create the admin ourselves with an
+#                                  explicit docker-compose command after
+#                                  install finishes, so we can control the
+#                                  password and it never lives in env vars.
+#   --no-report-self-hosted-issues say NO to Sentry's telemetry opt-in. This
+#                                  is a privacy choice — our internal infra
+#                                  shouldn't phone home.
+#   --apply-automatic-config-updates  let upstream silently apply any config
+#                                  migrations it would otherwise prompt for.
+#                                  Safe on first install (there's nothing to
+#                                  migrate); on upgrades, scripts/upgrade.sh
+#                                  gates this behind the dry-run + changelog
+#                                  review so we never silently apply a
+#                                  surprise config change.
+./install.sh \
+  --skip-user-creation \
+  --no-report-self-hosted-issues \
+  --apply-automatic-config-updates
 cd "${REPO_DIR}"
 
 # -----------------------------------------------------------------------------
