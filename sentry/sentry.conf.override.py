@@ -25,6 +25,31 @@
 
 
 # -----------------------------------------------------------------------------
+# Google OAuth credentials (client ID + secret)
+# -----------------------------------------------------------------------------
+#
+# Sourced from the web container's env, which is populated from .env.custom
+# on rishi-3 via docker-compose.override.yml's `environment:` entries for
+# the web service. See the comment block in sentry/config.yml that explains
+# why we set these here (in Python) and not in config.yml (YAML).
+#
+# We GUARD the assignments with `if os.environ.get(...)` so a missing env
+# var leaves the option unset rather than setting it to an empty string.
+# An empty string disables Google SSO cleanly; the literal string
+# `$GOOGLE_CLIENT_ID` (what happened when we tried YAML) makes it look
+# configured but fail in confusing ways.
+import os as _os
+
+_google_client_id = _os.environ.get("GOOGLE_CLIENT_ID")
+_google_client_secret = _os.environ.get("GOOGLE_CLIENT_SECRET")
+
+if _google_client_id:
+    SENTRY_OPTIONS["auth-google.client-id"] = _google_client_id
+if _google_client_secret:
+    SENTRY_OPTIONS["auth-google.client-secret"] = _google_client_secret
+
+
+# -----------------------------------------------------------------------------
 # Google Workspace SSO domain restriction
 # -----------------------------------------------------------------------------
 #

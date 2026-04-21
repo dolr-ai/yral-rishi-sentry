@@ -75,16 +75,24 @@ auth.user-rate-limit: 0
 # Google OAuth  #
 #################
 #
-# These values come from a GitHub Secret on the yral-rishi-sentry repo,
-# populated into `.env.custom` on rishi-3 by scripts/install.sh.
-# See Phase 4 of the plan for the Google Cloud Console setup steps.
+# Intentionally NOT set here. Sentry's config.yml parser does NOT
+# perform environment variable interpolation — a value like
+# `$GOOGLE_CLIENT_ID` is stored as the literal five-character string
+# `$GOOG...` and OAuth silently fails. That was a multi-hour dead-end
+# in Phase 4 of the rollout before we realised.
 #
-# Domain whitelisting (restrict to @gobazzinga.io) happens in
-# sentry.conf.override.py, NOT here — YAML can't encode "only allow this
-# domain" as a list restriction.
-
-auth-google.client-id: '$GOOGLE_CLIENT_ID'
-auth-google.client-secret: '$GOOGLE_CLIENT_SECRET'
+# Instead, auth-google.client-id and auth-google.client-secret are set
+# from `os.environ` inside `sentry/sentry.conf.override.py`, which is
+# Python code and DOES read env vars properly.
+#
+# The env vars themselves (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET) flow:
+#   GitHub Secrets / user's shell
+#     → scripts/install.sh
+#       → .env.custom on rishi-3
+#         → docker-compose.override.yml forwards them to the web service
+#           → Python env of the Sentry web process
+#             → os.environ.get() in sentry.conf.override.py
+#               → SENTRY_OPTIONS["auth-google.client-id"] (the real setting)
 
 ###############
 # Mail Server #
