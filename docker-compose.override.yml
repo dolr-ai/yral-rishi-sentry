@@ -95,6 +95,23 @@ services:
   web:
     mem_limit: 2g
     mem_reservation: 512m
+    # WHY we set GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET explicitly here:
+    # Upstream's `x-sentry-defaults` environment section lists bare
+    # `SENTRY_SYSTEM_SECRET_KEY:` (and a handful of other vars) but does
+    # NOT list Google OAuth vars — upstream has no way to know about our
+    # custom config.yml references to $GOOGLE_CLIENT_ID. Without these
+    # explicit entries, even though .env.custom contains real values and
+    # even though our shell has them exported, Compose does not propagate
+    # them to the web container. Sentry's config.yml loader then sees
+    # empty strings and SSO is silently broken.
+    #
+    # Using the `${VAR}` interpolation form (not the bare form) because
+    # it picks up values from --env-file .env.custom deterministically,
+    # regardless of whether the shell that invoked `docker compose`
+    # happens to have them exported.
+    environment:
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
 
   # --------------------------------------------------------------------------
   # taskworker — async task execution (replaces the old `worker` service
