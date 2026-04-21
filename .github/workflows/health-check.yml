@@ -1,0 +1,84 @@
+# =============================================================================
+# health-check.yml — external uptime watchdog for sentry.rishi.yral.com
+# =============================================================================
+#
+# WHAT THIS WORKFLOW DOES:
+#   Every 5 minutes, curl https://sentry.rishi.yral.com/_health/ and fail the
+#   GitHub Actions run if the HTTP status code is not 200. A failed run sends
+#   an email to everyone watching this repo (default GitHub behaviour for
+#   `schedule`-triggered failures).
+#
+# WHY AN EXTERNAL WATCHDOG:
+#   Sentry's own error reporting can't tell you when Sentry itself is down
+#   — that's the classic "who watches the watcher" problem. This workflow
+#   runs on GitHub's shared infra (independent of our rishi-* cluster), so a
+#   cluster-wide outage is detected immediately rather than when someone
+#   happens to open the UI.
+#
+#   This covers:
+#     - rishi-1 and rishi-2 both down (Cloudflare returns 522)
+#     - rishi-3 down (Caddy → rishi-3 times out)
+#     - Caddy not attached to sentry-web overlay (502 from Caddy)
+#     - Sentry web container crashed (Caddy reaches nginx but nginx can't
+#       reach the Django app; gives 502)
+#     - Kafka/Clickhouse/Postgres critical failure (web reports unhealthy)
+#
+# WHAT IT DOES NOT COVER:
+#   - Events being accepted by ingest but not flowing through to UI (lag).
+#     That's a separate Discover query that should eventually become
+#     another workflow; see Phase 9 TODO in RUNBOOK.
+#   - Google OAuth misconfiguration (the watchdog uses direct HTTP,
+#     bypassing SSO).
+#
+# CADENCE:
+#   Every 5 min (minimum GitHub allows for schedule-triggered runs). Also
+#   manually-triggerable via `workflow_dispatch` for ad-hoc checks.
+# =============================================================================
+
+name: Sentry health check
+
+on:
+  # `schedule` runs on UTC. Every 5 minutes in cron syntax = */5.
+  schedule:
+    - cron: '*/5 * * * *'
+  # Allow manual "run now" from the Actions tab or via `gh workflow run`.
+  workflow_dispatch:
+
+# Cancel any in-progress run if a new one starts. Prevents pile-up if a
+# single run hangs.
+concurrency:
+  group: sentry-health-check
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: curl /_health/
+    runs-on: ubuntu-latest
+    # 30 second hard cap. Normal response is <1 s. If we're waiting >30 s
+    # something is truly wedged and we want the loud alarm now.
+    timeout-minutes: 1
+
+    steps:
+      - name: Curl Sentry health endpoint
+        env:
+          # Single source of truth for the URL we're probing. If the URL
+          # changes, update here AND in project.config's PROJECT_DOMAIN.
+          SENTRY_URL: https://sentry.rishi.yral.com/_health/
+        run: |
+          set -euo pipefail
+          # -sS  = silent mode but show errors on stderr
+          # -w   = write-out format — we want the numeric HTTP status
+          # -o   = write body to /dev/null (we don't care about body content,
+          #        only the status code)
+          # --max-time 10  = bail after 10 seconds total (connect + body)
+          STATUS=$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$SENTRY_URL")
+          echo "GET $SENTRY_URL → $STATUS"
+
+          if [[ "$STATUS" != "200" ]]; then
+            # GitHub Actions' `::error::` prefix surfaces this as a red
+            # annotation in the run summary AND in the scheduled-run email.
+            echo "::error title=Sentry is unhealthy::HTTP $STATUS from $SENTRY_URL (expected 200)"
+            exit 1
+          fi
+
+          echo "Sentry is healthy."

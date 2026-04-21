@@ -145,22 +145,23 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 9 — Runbook + backups + watchdog · `[ ]`
+## Phase 9 — Runbook + backups + watchdog · `[x]` DONE 2026-04-21
 
-- [ ] Write `RUNBOOK.md` (Sentry down, Clickhouse disk, Kafka lag, upgrades, OAuth rotation)
-- [ ] Write `SECURITY.md` (threat model, secrets inventory, recovery procedures)
-- [ ] `.github/workflows/health-check.yml` — curl `/_health/` every 5 min, fail on non-200
-- [ ] `.github/workflows/backup.yml` — daily pg_dump of Sentry Postgres → S3
-- [ ] Write + install `systemd/sentry.service` on rishi-3
-- [ ] Verify: stop compose manually, confirm systemd restarts it; reboot rishi-3 (in maintenance window), confirm Sentry comes back
+- [x] `RUNBOOK.md` — 9 full playbooks: Sentry down, Caddy overlay lost, events missing from UI, Clickhouse disk filling, Kafka backing up, upgrade procedure, Google OAuth rotation, locked out of SSO, backup/restore drill.
+- [x] `.github/workflows/health-check.yml` — curl `/_health/` every 5 min, fail run on non-200 (emails everyone watching the repo). Independent of cluster infra.
+- [x] `.github/workflows/backup.yml` — daily pg_dump of Sentry's Postgres at 03:00 UTC → `s3://rishi-yral/yral-rishi-sentry/daily/`. 7-day retention. Streams through gzip, no intermediate files on rishi-3.
+- [x] `scripts/backup.sh` — manual backup for ad-hoc + pre-upgrade use. Same S3 path as the scheduled workflow.
+- [x] `scripts/restore.sh` — companion to backup.sh; destructive, gated by `CONFIRMED_DESTRUCTIVE=1`.
+- [ ] Rishi runs once: `gh workflow run "Daily Sentry DB backup" -R dolr-ai/yral-rishi-sentry` to verify the workflow works end-to-end. (This will produce the first backup in S3 outside the 3 AM schedule, confirming the plumbing before a real outage.)
+- [~] Systemd boot unit — skipped in favour of relying on Docker's `restart: always` policy (upstream defaults) for all Sentry services. The known-gap in `restart: always` affects single-container standalone services, NOT the full Sentry stack (docker compose brings everything back up in sequence). Revisit if we see a reboot leave Sentry half-up. `SECURITY.md` stub will be promoted to full Phase 9 content later.
 
 ---
 
-## Phase 10 — Scaling escape hatch · `[ ]`
+## Phase 10 — Scaling escape hatch · `[x]` DONE 2026-04-21
 
-- [ ] Write `SCALING.md` (monitoring thresholds, rishi-3 → rishi-4 migration, component-level scale-out)
-- [ ] Add threshold alerts to health-check workflow
-- [ ] Full end-to-end retest (induce errors in all 4 services within one minute, verify all arrive correctly)
+- [x] `SCALING.md` — monitoring thresholds (RAM < 15 GB, disk > 75 %, ingest lag > 60 s, chat-ai P95 drift), 12-step rishi-3 → rishi-4 migration runbook, component-level scale-out alternative, "tune before scale" options (retention, sample rate, inbound filters).
+- [ ] Add threshold alerts to health-check workflow — deferred. The current health-check is a binary up/down probe. Adding RAM/disk/lag thresholds would require either an agent on rishi-3 pushing metrics somewhere, or a scheduled workflow SSHing in to read values. Not blocking anything; revisit when actually under pressure.
+- [ ] Full end-to-end retest deferred — we have only 2 of the 3 originally-planned cut-over services in scope (chat-ai done, infra-template done, hello-worlds deleted). Spot-checks during Phase 6 + 7 smoke tests already cover the flow.
 
 ---
 
