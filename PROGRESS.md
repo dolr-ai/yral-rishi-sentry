@@ -131,14 +131,17 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 8 — Bake into the template · `[ ]`
+## Phase 8 — Bake into the template · `[x]` DONE 2026-04-21
 
-- [ ] Update `TEMPLATE.md` — replace `apm.yral.com` with `sentry.rishi.yral.com`; add numbered "create Sentry project" step
-- [ ] Update `scripts/new-service.sh` — end-of-run message pointing at the new Sentry UI
-- [ ] Update `INTEGRATIONS.md` — new Sentry endpoint, pointer to `yral-rishi-sentry` RUNBOOK
-- [ ] Update `SECURITY.md` — SENTRY_DSN source column
-- [ ] Update `infra/sentry.py` header comment
-- [ ] PR, self-review, merge
+- [x] `TEMPLATE.md` — swapped all `apm.yral.com` refs for `sentry.rishi.yral.com` via sed. Added Caddy-attachment-is-runtime-only caveat under "Things you do NOT need to redo". Added self-hosted Sentry as a bullet in the same list.
+- [x] `INTEGRATIONS.md` — same 3-for-3 swap.
+- [x] `CLAUDE.md` — 1 ref in the Secrets table.
+- [x] `infra/sentry.py` — 4 comment-only refs (helper body unchanged).
+- [x] `scripts/new-service.sh` — added a new end-of-run block that:
+      (a) tells the operator how to create a Sentry project + set the DSN secret, and
+      (b) warns that Caddy overlay attachment is runtime-only with a pointer to `yral-rishi-sentry`'s cron @reboot workaround.
+- [ ] **Pushed on branch `rishi/sentry-cutover-docs`** (commit `ec74921`). **NOT YET MERGED TO MAIN** — held off because the `rishi/haproxy-cfg-rotation` branch has in-progress teardown improvements; Rishi needs to decide merge order. PR URL: https://github.com/dolr-ai/yral-rishi-hetzner-infra-template/pull/new/rishi/sentry-cutover-docs
+- [ ] `RUNBOOK.md` in the template is deliberately NOT touched in this pass because the teardown branch has unrelated WIP edits to that same file; folding the Caddy-restart playbook in is deferred until the teardown branch lands on main. The snippet is staged in `yral-rishi-sentry/template-patches/RUNBOOK.md.snippet` for easy application at that time.
 
 ---
 
