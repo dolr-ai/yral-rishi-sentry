@@ -152,9 +152,24 @@ services:
   # --------------------------------------------------------------------------
   # clickhouse — time-series storage for events + traces
   # --------------------------------------------------------------------------
+  # mem_limit bumped 4g → 16g on 2026-04-22. rishi-3 has ~60 GB total RAM
+  # and is only lightly used for non-Sentry work (3 etcd + 3 Patroni
+  # followers, < 500 MB each); giving Clickhouse a comfortable 16 GB
+  # eliminates the "MEMORY_LIMIT_EXCEEDED at 1.2 GiB" errors we saw
+  # pre-tuning and gives merges room to run without spilling.
+  #
+  # The config.d/ volume mount below ships our small-host tuning
+  # (background_pool_size=4, mem ratio=0.9). Without it, Clickhouse
+  # ships with production-scale defaults (32 concurrent merges) that
+  # saturate rishi-3's 8 cores.
   clickhouse:
-    mem_limit: 4g
-    mem_reservation: 1g
+    mem_limit: 16g
+    mem_reservation: 4g
+    volumes:
+      # READ-ONLY mount — Clickhouse merges every *.xml under config.d/
+      # with its built-in defaults at startup. Safe & reversible: remove
+      # this stanza + re-run install.sh to fall back to upstream defaults.
+      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
 
   # --------------------------------------------------------------------------
   # kafka — event queue between relay and consumers
