@@ -166,10 +166,21 @@ services:
     mem_limit: 16g
     mem_reservation: 4g
     volumes:
-      # READ-ONLY mount — Clickhouse merges every *.xml under config.d/
-      # with its built-in defaults at startup. Safe & reversible: remove
-      # this stanza + re-run install.sh to fall back to upstream defaults.
-      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
+      # READ-ONLY SINGLE-FILE mount at a specific path inside config.d/.
+      # WHY not mount the whole directory? Upstream's docker-compose.yml
+      # already mounts a separate file at
+      # /etc/clickhouse-server/config.d/sentry.xml (from
+      # /home/deploy/sentry-upstream/clickhouse/config.xml). Mounting our
+      # dir OVER /etc/clickhouse-server/config.d/ would replace that
+      # mount-point and break the container's startup — observed
+      # during first rollout attempt as:
+      #   "failed to create shim task: ... create mountpoint for
+      #    /etc/clickhouse-server/config.d/sentry.xml: read-only file system"
+      # Mounting our single file at a SPECIFIC path (not the dir) sidesteps
+      # the collision — both upstream's sentry.xml and our
+      # 00-small-host-tuning.xml end up in the directory side-by-side, and
+      # Clickhouse loads both alphabetically.
+      - ./clickhouse/config.d/00-small-host-tuning.xml:/etc/clickhouse-server/config.d/00-small-host-tuning.xml:ro
 
   # --------------------------------------------------------------------------
   # kafka — event queue between relay and consumers
