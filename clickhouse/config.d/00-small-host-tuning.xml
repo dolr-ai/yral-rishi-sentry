@@ -1,81 +1,58 @@
 <?xml version="1.0"?>
 <!--
   ============================================================================
-  Clickhouse small-host tuning (applied 2026-04-22)
+  Clickhouse small-host tuning (2026-04-22 v2)
   ============================================================================
 
+  WHAT CHANGED IN v2 (relative to v1):
+    Added `<merge_tree>` section. Clickhouse's startup sanity check requires
+      number_of_free_entries_in_pool_to_execute_mutation  <  pool_size * ratio
+    Defaults: 20 (free entries) vs 16 × 2 = 32 (total pool) → 20 < 32 ✓ OK.
+    Our override: 20 (default) vs 4 × 1 = 4 (total pool) → 20 ≥ 4 ✗ FAIL.
+    Observed on first-deploy attempt as:
+      "The value of 'number_of_free_entries_in_pool_to_execute_mutation'
+       setting (20) is greater than the value of 'background_pool_size' *
+       'background_merges_mutations_concurrency_ratio' (4)"
+      (BAD_ARGUMENTS — Clickhouse refuses to start)
+
+    Same rule applies to `number_of_free_entries_in_pool_to_lower_max_size_of_merge`
+    (default 8). We pin both to 1 so mutations can always run on our tiny pool.
+
   WHAT THIS FILE DOES:
-    Overrides three classes of Clickhouse defaults so that our deployment on
-    rishi-3 doesn't oversubscribe the 8 CPU cores with background merge work.
+    Overrides Clickhouse defaults that are sized for a production box
+    (32+ cores, 64+ GB dedicated Clickhouse), so they fit our rishi-3
+    deployment (8 shared cores, 16 GB mem_limit via compose).
 
-  WHY IT EXISTS:
-    Upstream Clickhouse's defaults are "production-scale" — sized for a
-    dedicated 32+ core / 64+ GB box running ONLY Clickhouse. On rishi-3 we:
-      - Share 8 cores with ~30 other Sentry containers + etcd + Patroni.
-      - Allocate 16 GB of RAM via docker-compose mem_limit (was 4 GB before).
-      - Ingest a few events/sec of application traffic — TINY compared to
-        the scale the defaults are sized for.
-
-    The symptom that triggered this file: Beszel alerting sustained > 90 %
-    CPU, load avg 20+ on an 8-core box. Root cause: 12 concurrent background
-    merges (in a pool of 32 slots) saturating all cores. Merges themselves
-    are cheap individually; it's the concurrency that broke us.
-
-  HOW IT'S DELIVERED:
-    docker-compose.override.yml in this repo mounts THIS DIRECTORY as
-    read-only at /etc/clickhouse-server/config.d/ in the Clickhouse
-    container. Clickhouse auto-loads every *.xml file in that directory at
-    startup and merges them on top of the built-in defaults — the last
-    value wins, per Clickhouse's XML merge rules.
-
-  HOW TO ROLL BACK:
-    Delete (or comment-out) the volume mount from docker-compose.override.yml
-    and re-run scripts/install.sh. Clickhouse reverts to the built-in
-    defaults on next start. No data loss.
-
-  WHEN TO REVISIT:
-    If sustained events/sec rate grows ~10× beyond today's level (~30
-    events/sec or more), the 4-merge-slot cap could start creating
-    part-accumulation pressure (TOO_MANY_PARTS warnings, then errors).
-    At that point raise background_pool_size from 4 → 8 (or higher) and
-    ratio from 1 → 2. See Clickhouse docs: background merges.
+  ROLLBACK: remove the volume mount from docker-compose.override.yml
+  and re-run scripts/install.sh.
   ============================================================================
 -->
 <clickhouse>
 
-  <!-- ====================================================================
-       Background merge concurrency
-       ====================================================================
-       Default: background_pool_size=16, ratio=2 → 32 max merge tasks.
-       Our override: 4 × 1 = 4 max merge tasks. 8× reduction.
-
-       With Kafka → Sentry ingest running continuously, Clickhouse is
-       constantly receiving small new parts that need merging into larger
-       ones. Each merge reads N parts, combines + sorts, writes one part.
-       That's read-heavy + CPU-heavy. At 32-concurrent on 8 cores it's 4x
-       oversubscribed. At 4-concurrent we have room for the consumers,
-       query serving, and other tenants on rishi-3 too. -->
+  <!-- ===== Server-level pool sizes ============================== -->
+  <!-- Default 16. Halving to reduce thread-count pressure on 8 cores. -->
   <background_pool_size>4</background_pool_size>
-  <background_merges_mutations_concurrency_ratio>1</background_merges_mutations_concurrency_ratio>
-
-  <!-- Companion pool sizes — keep them proportional. These rarely matter
-       for us (no replication fetches, no ZooKeeper-heavy operations) but
-       the defaults (16 each) are also oversized. -->
   <background_fetches_pool_size>2</background_fetches_pool_size>
   <background_common_pool_size>2</background_common_pool_size>
 
-  <!-- ====================================================================
-       Memory
-       ====================================================================
-       By default Clickhouse computes max_server_memory_usage as a fraction
-       of either total host RAM or the cgroup mem_limit, depending on
-       version. Before this change we observed MEMORY_LIMIT_EXCEEDED with
-       "maximum: 1.20 GiB" despite a 4 GB container limit — Clickhouse was
-       being conservative and only using ~30 % of its available memory.
-
-       Pin to 0.9 (90 %) of container mem_limit. With docker-compose.override's
-       new mem_limit=16g, Clickhouse will use up to ~14.4 GB — well beyond
-       anything our current workload could demand but simple and safe. -->
+  <!-- ===== Memory ================================================ -->
+  <!-- Explicit 90 % of container mem_limit. At 16 GB → ~14.4 GB usable. -->
   <max_server_memory_usage_to_ram_ratio>0.9</max_server_memory_usage_to_ram_ratio>
+
+  <!-- ===== MergeTree-level settings ============================== -->
+  <!-- These govern how MergeTree tables schedule merges + mutations
+       against the pool declared above. All the sanity-check constraints
+       have to hold:
+          pool_size * ratio  >  max of
+             number_of_free_entries_in_pool_to_execute_mutation,
+             number_of_free_entries_in_pool_to_lower_max_size_of_merge
+       Our pool is 4 × 1 = 4 total. We pin the free-entries settings to 1
+       so the sanity check passes (1 < 4 ✓) and mutations + large-merge
+       schedulability is preserved — just with tighter resource budget. -->
+  <merge_tree>
+    <background_merges_mutations_concurrency_ratio>1</background_merges_mutations_concurrency_ratio>
+    <number_of_free_entries_in_pool_to_execute_mutation>1</number_of_free_entries_in_pool_to_execute_mutation>
+    <number_of_free_entries_in_pool_to_lower_max_size_of_merge>1</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+  </merge_tree>
 
 </clickhouse>
