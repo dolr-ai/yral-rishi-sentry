@@ -159,6 +159,23 @@ ln -sf "${REPO_DIR}/docker-compose.override.yml" \
        "${SENTRY_UPSTREAM_DIR}/docker-compose.override.yml"
 
 # -----------------------------------------------------------------------------
+# Step 6b: expose our clickhouse/config.d tuning file at a path the compose
+# override can mount from. The compose override uses a RELATIVE bind path
+# `./clickhouse/config.d/...` — that's relative to where `docker compose`
+# runs, which is SENTRY_UPSTREAM_DIR, not our repo. Without this symlink,
+# Docker would create an empty directory at the target (observed in the
+# 2026-04-22 install attempt).
+#
+# We symlink our FILE (not the whole directory) because upstream's
+# clickhouse/ directory is managed by upstream — we add our file under it
+# without stepping on upstream's existing `clickhouse/config.xml`.
+# -----------------------------------------------------------------------------
+echo "==> Linking clickhouse/config.d/00-small-host-tuning.xml"
+mkdir -p "${SENTRY_UPSTREAM_DIR}/clickhouse/config.d"
+ln -sf "${REPO_DIR}/clickhouse/config.d/00-small-host-tuning.xml" \
+       "${SENTRY_UPSTREAM_DIR}/clickhouse/config.d/00-small-host-tuning.xml"
+
+# -----------------------------------------------------------------------------
 # Step 7: write .env.custom.
 #
 # Upstream install.sh calls Docker Compose with `--env-file .env.custom`
@@ -260,6 +277,17 @@ GOOGLE_CLIENT_SECRET='${GOOGLE_CLIENT_SECRET}'
 # the public nginx listens on inside rishi-3. Caddy on rishi-1/rishi-2
 # is the only thing that should reach it.
 SENTRY_BIND='127.0.0.1:9000'
+
+# Sentry event retention. Upstream sentry.conf.py reads this env var
+# (default 90) and writes it to SENTRY_OPTIONS["system.event-retention-days"]
+# on startup. That's "configured on disk" from Sentry's perspective, so
+# runtime \`sentry config set\` is refused. Setting the env var here is the
+# supported override path.
+#
+# 30 days is the right number for our scale: we don't need a full 90-day
+# window of raw events, and Clickhouse merges less when its oldest parts
+# are younger → lower ongoing CPU.
+SENTRY_EVENT_RETENTION_DAYS='30'
 EOF
 chmod 600 "${ENV_CUSTOM}"
 
