@@ -165,22 +165,17 @@ services:
   clickhouse:
     mem_limit: 16g
     mem_reservation: 4g
-    volumes:
-      # READ-ONLY SINGLE-FILE mount at a specific path inside config.d/.
-      # WHY not mount the whole directory? Upstream's docker-compose.yml
-      # already mounts a separate file at
-      # /etc/clickhouse-server/config.d/sentry.xml (from
-      # /home/deploy/sentry-upstream/clickhouse/config.xml). Mounting our
-      # dir OVER /etc/clickhouse-server/config.d/ would replace that
-      # mount-point and break the container's startup — observed
-      # during first rollout attempt as:
-      #   "failed to create shim task: ... create mountpoint for
-      #    /etc/clickhouse-server/config.d/sentry.xml: read-only file system"
-      # Mounting our single file at a SPECIFIC path (not the dir) sidesteps
-      # the collision — both upstream's sentry.xml and our
-      # 00-small-host-tuning.xml end up in the directory side-by-side, and
-      # Clickhouse loads both alphabetically.
-      - ./clickhouse/config.d/00-small-host-tuning.xml:/etc/clickhouse-server/config.d/00-small-host-tuning.xml:ro
+    # NOTE 2026-04-22: a Clickhouse config.d override was tried here and
+    # reverted. It caused Clickhouse's startup sanity check to fail:
+    #   "number_of_free_entries_in_pool_to_execute_mutation (20)
+    #    greater than background_pool_size * ratio (4)"
+    # Root cause: that setting's default is defined in users.xml for the
+    # default profile — a config.d/merge_tree override doesn't apply to
+    # it. The correct fix is a users.d/ drop-in with a <profiles><default>
+    # block. Deferred out of this commit to get Sentry back up. See
+    # clickhouse/config.d/00-small-host-tuning.xml for the intended
+    # server-side settings; they'll be re-enabled once the users.d/
+    # companion is written and the symlink wiring is updated accordingly.
 
   # --------------------------------------------------------------------------
   # kafka — event queue between relay and consumers
