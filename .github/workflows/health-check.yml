@@ -82,3 +82,53 @@ jobs:
           fi
 
           echo "Sentry is healthy."
+
+  # ==========================================================================
+  # cpu-pressure — detects when rishi-3 is under sustained load
+  # ==========================================================================
+  # This is the "early-warning" counterpart to the binary up/down check above.
+  # Beszel alerts us at ~90 % CPU; this workflow catches drift earlier so we
+  # can tune sampling / retention / etc. before the host is actually slow.
+  #
+  # Threshold: 5-minute load average > 12 on an 8-core host = ~1.5× core
+  # count sustained. Normal operation post-2026-04-22-tuning sits under 4.
+  # A single sustained threshold breach emails whoever watches this repo.
+  #
+  # Uses the same HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY secret
+  # the backup workflow uses — same CI key, same access scope.
+  # ==========================================================================
+  cpu-pressure:
+    name: rishi-3 load avg watchdog
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      SENTRY_HOST: 136.243.147.225
+      # 5-min load avg threshold. Chosen as 1.5× core count (8 cores).
+      # Anything sustained above this means CPU is saturated longer than
+      # bursty tasks should take.
+      LOAD_THRESHOLD: '12'
+
+    steps:
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.HETZNER_BARE_METAL_GITHUB_ACTIONS_SSH_PRIVATE_KEY }}" > ~/.ssh/rishi_ci_key
+          chmod 600 ~/.ssh/rishi_ci_key
+          ssh-keyscan -H "$SENTRY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+      - name: Read /proc/loadavg over SSH and compare to threshold
+        run: |
+          set -euo pipefail
+          # /proc/loadavg format: "1min 5min 15min runnable/total lastpid"
+          # Column 2 is the 5-min load avg — the one we care about.
+          LOAD5=$(ssh -o BatchMode=yes -i ~/.ssh/rishi_ci_key "deploy@${SENTRY_HOST}" "awk '{print \$2}' /proc/loadavg")
+          echo "rishi-3 5-min load avg: $LOAD5 (threshold: $LOAD_THRESHOLD)"
+
+          # bash doesn't compare floats natively; pipe through awk.
+          EXCEEDED=$(awk -v l="$LOAD5" -v t="$LOAD_THRESHOLD" 'BEGIN { print (l > t) ? "yes" : "no" }')
+          if [[ "$EXCEEDED" == "yes" ]]; then
+            echo "::error title=rishi-3 CPU pressure::5-min load avg $LOAD5 exceeds threshold $LOAD_THRESHOLD on 8-core rishi-3"
+            exit 1
+          fi
+
+          echo "rishi-3 load is within threshold."
