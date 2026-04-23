@@ -16,8 +16,8 @@
 This will be rewritten as a numbered walkthrough of every file in the repo, grouped by concern:
 
 - **Config** (what you edit to change behaviour): `project.config`, `sentry/config.yml`, `sentry/sentry.config.py`, `docker-compose.override.yml`.
-- **Operations** (what runs at deploy or maintenance time): `scripts/install.sh`, `scripts/upgrade.sh`, `scripts/backup.sh`, `scripts/restore.sh`.
-- **CI** (what runs on a schedule): `.github/workflows/backup.yml`, `.github/workflows/health-check.yml`.
+- **Operations** (what runs at deploy or maintenance time): `scripts/install.sh`, `scripts/upgrade.sh`, `scripts/sentry-admin.sh`, `scripts/caddy-reconnect.sh`, `scripts/bootstrap-caddy-reconnect.sh`.
+- **CI** (what runs on a schedule): `.github/workflows/health-check.yml` (Sentry /_health/ + rishi-3 load-avg watchdog every 5 min).
 - **Boot wiring** (how Sentry survives a reboot): `systemd/sentry.service`.
 - **Docs** (how humans reason about it): the five required docs.
 

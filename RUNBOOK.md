@@ -14,7 +14,7 @@ Step-by-step playbooks for common incidents on the self-hosted Sentry instance. 
 | Planned Sentry version upgrade | [6. How to upgrade Sentry](#6-how-to-upgrade-sentry) |
 | Google OAuth secret compromised / expiring | [7. Rotate Google OAuth client secret](#7-rotate-google-oauth-client-secret) |
 | Can't sign in via Google, need emergency access | [8. Locked out of SSO — fallback login](#8-locked-out-of-sso--fallback-login) |
-| Quarterly DR drill | [9. Backup / restore drill](#9-backup--restore-drill) |
+| Postgres loss (projects, DSNs, users) | [9. Sentry DB gone — reconstruction path](#9-sentry-db-gone--reconstruction-path) |
 
 **Host quick-connect:**
 ```bash
@@ -210,8 +210,7 @@ ssh deploy@136.243.147.225
 1. Read the upstream CHANGELOG between current pin and target tag:
    `https://github.com/getsentry/self-hosted/blob/<TARGET_TAG>/CHANGELOG.md`
    Look for: schema migrations, breaking config changes, Kafka topic changes, deprecated services.
-2. Confirm there's a recent daily backup in S3 (`.github/workflows/backup.yml` should show green).
-3. Schedule the upgrade for low-traffic hours. Sentry is down 5–20 min during the upgrade.
+2. Schedule the upgrade for low-traffic hours. Sentry is down 5–20 min during the upgrade. (No automated backup exists — see playbook 9 for what reconstruction looks like if it goes very wrong.)
 
 **Upgrade steps:**
 
@@ -223,16 +222,17 @@ cd ~/"Claude Projects/yral-rishi-sentry"
 # Dry-run first — shows what would change without touching the running stack:
 CONFIRMED_READ_CHANGELOG=1 bash scripts/upgrade.sh --dry-run
 
-# If dry-run looks right, real upgrade:
-CONFIRMED_READ_CHANGELOG=1 bash scripts/upgrade.sh
+# If dry-run looks right, real upgrade (no backup exists — see playbook 9
+# for DR path; gate requires both CONFIRMED_READ_CHANGELOG and CONFIRMED_NO_BACKUP):
+CONFIRMED_READ_CHANGELOG=1 CONFIRMED_NO_BACKUP=1 bash scripts/upgrade.sh
 ```
 
-`scripts/upgrade.sh` takes a fresh backup first, then stops + upgrades + restarts. On failure it exits with the rollback commands printed.
+`scripts/upgrade.sh` stops, upgrades, restarts. On failure it exits with the rollback commands printed.
 
 **Rollback** (if upgrade fails):
 1. Revert `SENTRY_VERSION` in `project.config` to the previous tag.
 2. `bash scripts/install.sh` to check out the old tag + recreate containers.
-3. `bash scripts/restore.sh <pre-upgrade-backup-timestamp>` if the schema is in a bad state.
+3. If the Postgres schema is in a bad state, go to playbook 9 (reconstruct projects + rotate DSNs).
 
 ---
 
@@ -282,18 +282,50 @@ ssh deploy@136.243.147.225
 
 ---
 
-## 9. Backup / restore drill
+## 9. Sentry DB gone — reconstruction path
 
-**Quarterly exercise** to confirm backups are actually restorable. Run on a test instance, NOT production.
+**Context.** Sentry's Postgres (issue metadata, project configs, DSNs, users, alert rules) is deliberately NOT backed up as of 2026-04-23 (see `PROGRESS.md` for rationale). A full DB loss means Sentry is effectively fresh — no projects, no DSNs, no users. Reconstruction is ~45-60 min of operator time for our current 2 services.
 
-1. Provision a throwaway Hetzner box (or a local docker-compose stack of Sentry self-hosted).
-2. Pick a recent daily backup key: `aws s3 ls --endpoint-url https://hel1.your-objectstorage.com s3://rishi-yral/yral-rishi-sentry/daily/ | tail -5`
-3. On the test box, run:
+**When this playbook fires:**
+- A failed upgrade corrupted Postgres + `install.sh` won't recover.
+- Clickhouse is fine but Sentry's Postgres volume is unreadable.
+- Someone ran `sentry-admin.sh down -v` by accident and wiped the volume.
+
+**Reconstruction steps:**
+
+1. Get Sentry running again with a fresh Postgres:
    ```
-   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... CONFIRMED_DESTRUCTIVE=1 \
-     SENTRY_HOST=<test-box-ip> bash scripts/restore.sh <TIMESTAMP>
+   ssh deploy@rishi-3
+   cd ~/sentry-upstream
+   docker compose down -v      # wipes all volumes if not already wiped
+   cd ~/yral-rishi-sentry
+   CONFIRMED_NO_BACKUP=1 bash scripts/install.sh
    ```
-4. Confirm: UI loads, expected user count matches, issue IDs look reasonable.
-5. Tear down the test instance.
+   This brings up a clean Sentry. You'll see the "Welcome to Sentry" wizard on next login.
 
-Record the drill outcome in `PROGRESS.md` so we have a track record for incident post-mortems.
+2. Re-create the superuser (see Phase 2 of the original rollout plan):
+   ```
+   ./scripts/sentry-admin.sh run --rm -it web \
+       createuser --email rishi@gobazzinga.io --superuser
+   ```
+
+3. Finish the setup wizard in the UI. Values same as the original Phase 4.4:
+   - Admin email: `rishi@gobazzinga.io`
+   - Allow registration: off
+   - Beacon: anonymous
+   - CPU/RAM: private
+
+4. Re-configure Google SSO: https://sentry.rishi.yral.com/settings/sentry/auth/ → Google Apps → Configure → authorize.
+
+5. For each live service that was reporting to Sentry (currently 2: `yral-chat-ai`, `yral-rishi-hetzner-infra-template`):
+   - Create the Sentry project (UI or Django shell — the original approach used Django shell, see Phase 7 of the plan).
+   - Copy the new DSN from Settings → Client Keys.
+   - `gh secret set SENTRY_DSN -R dolr-ai/<service-repo>` (paste new DSN).
+   - `gh run rerun <last-deploy-run-id> -R dolr-ai/<service-repo>` to pick up the new secret (or push any trivial commit).
+   - Verify events flow: `docker exec <service-container> python3 -c 'import sys; sys.path.insert(0, "/app"); from infra import init_sentry; import sentry_sdk; init_sentry(); sentry_sdk.capture_message("reconstruction smoke test"); sentry_sdk.flush(10.0)'`
+
+6. Re-enable any inbound filters (Data Filters → Health check transactions) per project.
+
+7. If using cron monitors / custom alert rules, recreate them. (We don't currently have any.)
+
+**Event history is lost.** Old issues, performance traces before the reconstruction, user feedback — all gone. This is the accepted trade-off for not running daily backups.

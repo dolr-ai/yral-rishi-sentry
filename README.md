@@ -7,8 +7,8 @@ Self-hosted Sentry for Rishi's services on Hetzner bare metal. Replaces the shar
 This repo is a thin wrapper around the upstream `getsentry/self-hosted` Docker Compose deployment. Upstream ships the actual Sentry services (web, worker, relay, snuba, clickhouse, kafka, postgres, etc.). This repo holds:
 
 1. **Our config overrides** — URL prefix, Google Workspace SSO, domain whitelist, resource limits, volume paths.
-2. **Operational scripts** — install, upgrade, backup, restore.
-3. **CI cron jobs** — daily DB backup, 5-minute external health check.
+2. **Operational scripts** — install, upgrade.
+3. **CI cron jobs** — 5-minute external health check + rishi-3 load-average watchdog.
 4. **The systemd unit** that makes Sentry survive a rishi-3 reboot (Docker's `restart: always` doesn't).
 5. **The docs** — runbook, security threat model, scaling escape hatch.
 
@@ -71,4 +71,4 @@ ssh -i ~/.ssh/rishi-hetzner-ci-key deploy@<rishi-3-ip> \
 
 ## Why a separate repo (not an instance of `yral-rishi-hetzner-infra-template`)
 
-The infra template assumes one FastAPI service + optional Patroni-backed Postgres behind Caddy. Sentry is a 15-container stack with its own Postgres, Clickhouse, Kafka, Redis, and Zookeeper. Forcing it into the template's shape would fight both systems. Instead: a dedicated repo that mirrors the template's *conventions* (project.config, documentation standards, GitHub Actions for backups + health, same Caddy snippet pattern) without inheriting its *structure*.
+The infra template assumes one FastAPI service + optional Patroni-backed Postgres behind Caddy. Sentry is a 15-container stack with its own Postgres, Clickhouse, Kafka, Redis, and Zookeeper. Forcing it into the template's shape would fight both systems. Instead: a dedicated repo that mirrors the template's *conventions* (project.config, documentation standards, GitHub Actions for health monitoring, same Caddy snippet pattern) without inheriting its *structure*.

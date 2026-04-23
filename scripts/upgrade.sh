@@ -21,12 +21,14 @@
 #      pull` for the new image tags but does NOT stop the running stack.
 #      Confirms the images exist and can be fetched before committing.
 #
-#   3. **Pre-upgrade backup trigger** — runs `scripts/backup.sh` before
-#      touching anything. If backup fails, upgrade aborts.
-#
-#   4. **Rollback note** — on failure, prints the exact rollback
-#      commands. Upstream does NOT support down-migrations; our only
-#      rollback path is "restore from the pre-upgrade backup."
+#   3. **Rollback note** — on failure, prints the exact rollback
+#      commands. Upstream does NOT support down-migrations. There is
+#      NO automated backup (removed 2026-04-23) — a failed upgrade
+#      that corrupts Sentry's Postgres requires manual recovery:
+#      recreate projects, re-issue DSNs, redeploy each reporting
+#      service. Roughly 45-60 min for our current 2 services. This
+#      is the consciously-accepted trade-off; re-read the rationale
+#      in PROGRESS.md before adding backup back.
 #
 # HOW TO USE:
 #
@@ -127,26 +129,36 @@ fi
 # --- Real upgrade path ------------------------------------------------------
 
 echo ""
-echo "==> Step 1/4: pre-upgrade backup"
-if [[ -x "${REPO_DIR}/scripts/backup.sh" ]]; then
-  bash "${REPO_DIR}/scripts/backup.sh"
-else
-  echo "WARNING: scripts/backup.sh not yet written (Phase 9 work item)." >&2
-  echo "Proceeding without a pre-upgrade backup IS RISKY. Type 'proceed' to continue." >&2
-  read -r confirm
-  [[ "${confirm}" == "proceed" ]] || { echo "Aborted."; exit 1; }
+echo "==> Step 1/3: no-backup gate"
+# No automated backup (removed 2026-04-23). If the upgrade fails mid-flight
+# and corrupts Sentry's Postgres, recovery is manual: recreate projects +
+# DSNs, redeploy each reporting service. See PROGRESS.md for the full
+# rationale. Require explicit operator acknowledgement.
+if [[ "${CONFIRMED_NO_BACKUP:-}" != "1" ]]; then
+  cat >&2 <<EOF
+
+WARNING: No backup will be taken before this upgrade.
+
+If the upgrade corrupts Sentry's Postgres you will lose all
+project metadata (projects, DSNs, teams, user accounts, alert
+rules). Recovery = recreate projects + rotate DSNs + redeploy
+each service. ~45-60 min for our 2 services.
+
+To proceed knowingly:
+  CONFIRMED_READ_CHANGELOG=1 CONFIRMED_NO_BACKUP=1 bash scripts/upgrade.sh
+
+EOF
+  exit 1
 fi
 
-echo "==> Step 2/4: checking out new upstream tag"
+echo "==> Step 2/3: checking out new upstream tag"
 cd "${SENTRY_UPSTREAM_DIR}"
 git fetch --depth 1 origin tag "${TARGET_VERSION}"
 git checkout "${TARGET_VERSION}"
 
-echo "==> Step 3/4: re-running install.sh (migrates DBs, updates Clickhouse schemas, etc.)"
+echo "==> Step 3/3: re-running install.sh (migrates DBs, updates Clickhouse schemas, etc.) + verify health"
 # The install script is itself idempotent and handles down-time for us.
 bash "${REPO_DIR}/scripts/install.sh"
-
-echo "==> Step 4/4: verify health"
 for i in 1 2 3 4 5 6; do
   if curl -fsS http://127.0.0.1:9000/_health/ 2>/dev/null | grep -q '"ok"\|ok'; then
     echo ""
@@ -163,11 +175,11 @@ ERROR: health check failed after upgrade. >&2
 
 Rollback:
   1. Revert project.config: bump SENTRY_VERSION back to ${CURRENT_VERSION}.
-  2. Restore the pre-upgrade backup:  bash ${REPO_DIR}/scripts/restore.sh <backup-timestamp>
-  3. Re-run:                         bash ${REPO_DIR}/scripts/install.sh
-
-If restore.sh is not yet written (Phase 9 work item), escalate to Saikat
-with the backup file location from step 1.
+  2. Re-run:                         bash ${REPO_DIR}/scripts/install.sh
+  3. If Postgres is corrupted (unlikely; upstream migrations are careful):
+     recreate projects + DSNs in the Sentry UI, redeploy each reporting
+     service with its new DSN. No automated restore path (backup was
+     intentionally removed 2026-04-23 — see PROGRESS.md).
 EOF
 
 exit 1

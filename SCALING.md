@@ -38,13 +38,7 @@ When the thresholds above trip, this is the path.
    ```
    Services sending to Sentry will transparently retry their SDK buffers when Sentry comes back.
 
-2. **Take a fresh backup:**
-   ```
-   # From your laptop:
-   AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
-     bash scripts/backup.sh
-   ```
-   Belt-and-braces. If the rsync goes wrong, we have a known-good point to restore from.
+2. **No backup step** (intentionally removed 2026-04-23; see PROGRESS.md). If the rsync of volumes below goes wrong, fallback is playbook 9 in RUNBOOK ("Sentry DB gone — reconstruction path") — recreate projects + rotate DSNs + redeploy each reporting service.
 
 3. **Stop Sentry on rishi-3, preserving volumes:**
    ```

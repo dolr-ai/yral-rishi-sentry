@@ -28,7 +28,7 @@ Legend: `[x]` done · `[~]` in progress · `[ ]` not started · `[-]` skipped / 
 - [x] `sentry/config.yml` — URL prefix, `auth.allow-registration: false`, Google OAuth env-var placeholders, mail=dummy
 - [x] `sentry/sentry.conf.override.py` — `GOOGLE_DOMAIN_WHITELIST = ['gobazzinga.io']` + session hardening
 - [x] `scripts/install.sh` — idempotent bootstrap; places our overrides, runs upstream install.sh, verifies `/_health/`
-- [x] `scripts/upgrade.sh` — changelog-gated, dry-run-first upgrade with pre-upgrade backup hook
+- [x] `scripts/upgrade.sh` — changelog-gated, dry-run-first upgrade (originally had a pre-upgrade backup hook; removed 2026-04-23 along with the rest of the backup machinery)
 
 **On-rishi-3 steps**
 - [x] `git clone` of yral-rishi-sentry to rishi-3 `~/yral-rishi-sentry` — DONE 2026-04-21
@@ -145,15 +145,14 @@ For future reference — each of these is now baked into the install.sh in a way
 
 ---
 
-## Phase 9 — Runbook + backups + watchdog · `[x]` DONE 2026-04-21
+## Phase 9 — Runbook + watchdog · `[x]` DONE 2026-04-21 / REVISED 2026-04-23
 
-- [x] `RUNBOOK.md` — 9 full playbooks: Sentry down, Caddy overlay lost, events missing from UI, Clickhouse disk filling, Kafka backing up, upgrade procedure, Google OAuth rotation, locked out of SSO, backup/restore drill.
-- [x] `.github/workflows/health-check.yml` — curl `/_health/` every 5 min, fail run on non-200 (emails everyone watching the repo). Independent of cluster infra.
-- [x] `.github/workflows/backup.yml` — daily pg_dump of Sentry's Postgres at 03:00 UTC → `s3://rishi-yral/yral-rishi-sentry/daily/`. 7-day retention. Streams through gzip, no intermediate files on rishi-3.
-- [x] `scripts/backup.sh` — manual backup for ad-hoc + pre-upgrade use. Same S3 path as the scheduled workflow.
-- [x] `scripts/restore.sh` — companion to backup.sh; destructive, gated by `CONFIRMED_DESTRUCTIVE=1`.
-- [ ] Rishi runs once: `gh workflow run "Daily Sentry DB backup" -R dolr-ai/yral-rishi-sentry` to verify the workflow works end-to-end. (This will produce the first backup in S3 outside the 3 AM schedule, confirming the plumbing before a real outage.)
-- [~] Systemd boot unit — skipped in favour of relying on Docker's `restart: always` policy (upstream defaults) for all Sentry services. The known-gap in `restart: always` affects single-container standalone services, NOT the full Sentry stack (docker compose brings everything back up in sequence). Revisit if we see a reboot leave Sentry half-up. `SECURITY.md` stub will be promoted to full Phase 9 content later.
+- [x] `RUNBOOK.md` — 9 full playbooks: Sentry down, Caddy overlay lost, events missing from UI, Clickhouse disk filling, Kafka backing up, upgrade procedure, Google OAuth rotation, locked out of SSO. Playbook #9 originally covered a "backup / restore drill"; 2026-04-23 revised to "Sentry DB gone — reconstruction path" since we no longer keep backups.
+- [x] `.github/workflows/health-check.yml` — curl `/_health/` every 5 min + rishi-3 load-avg watchdog. Fails run on non-200 or load > 12 (emails everyone watching the repo). Independent of cluster infra.
+- [~] `.github/workflows/backup.yml` — **REMOVED 2026-04-23.** See the "Backup infrastructure retrospectively removed" section at the bottom of this file.
+- [~] `scripts/backup.sh` + `scripts/restore.sh` — **REMOVED 2026-04-23.**
+- [~] Systemd boot unit — skipped in favour of relying on Docker's `restart: always` policy (upstream defaults) for all Sentry services. The known-gap in `restart: always` affects single-container standalone services, NOT the full Sentry stack (docker compose brings everything back up in sequence). Revisit if we see a reboot leave Sentry half-up.
+- [~] `SECURITY.md` full threat model — stubbed; revisit when there's demand.
 
 ---
 
@@ -179,3 +178,17 @@ For future reference — each of these is now baked into the install.sh in a way
 2. **Template repo — add `caddy-reconnect` pattern to `scripts/new-service.sh`'s output message** so new services created from the template know Caddy attachment is runtime-only until #1 is done. Tracked in Phase 8 of this project.
 
 3. **Template repo — add a "Caddy restarted unexpectedly" playbook to the template's `RUNBOOK.md`.** Same learning from Phase 3 of this project. Tracked in Phase 8.
+
+---
+
+## Backup infrastructure retrospectively removed (2026-04-23)
+
+The files `/github/workflows/backup.yml`, `scripts/backup.sh`, `scripts/restore.sh` (and associated hooks in `scripts/upgrade.sh`, doc refs across README/RUNBOOK/SCALING/SECURITY/READING-ORDER) were deleted in a single commit on 2026-04-23.
+
+**Why.** Sentry's Postgres holds issue metadata, projects, DSNs, users, alert rules. **Losing all of it means re-running the Sentry setup wizard + recreating projects + pasting new DSNs into each reporting service** — roughly 45-60 min for our current 2 services. Event history (Clickhouse) was NEVER in the backup scope anyway — that was always accepted loss. So the backup was covering a cheap-to-recover-from failure mode at the cost of daily operational overhead (S3 spend, CI cycles, failure alerts, secret sprawl). Trade didn't pay off.
+
+**Also.** The scheduled backup workflow was silently failing daily since 2026-04-22 with `pg_dump: database "sentry" does not exist`. Sentry's actual DB name is `postgres` (it uses the default DB of the Postgres image, not a dedicated one). The fix would have been a one-word edit, but we'd have ended up with working-but-pointless backups. Better to just remove.
+
+**If backup comes back.** Future Rishi: `pg_dump -U postgres postgres` is the right invocation. Don't assume self-hosted apps name their DB after themselves — always `\l` first.
+
+**What playbook 9 in RUNBOOK.md does now.** Instead of "backup/restore drill", it's "Sentry DB gone — reconstruction path" — step-by-step what to do if the Postgres volume is unrecoverable. Same total reconstruction time (~45-60 min), just explicitly documented since we can no longer rely on a restore.
