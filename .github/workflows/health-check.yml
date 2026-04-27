@@ -31,16 +31,23 @@
 #     bypassing SSO).
 #
 # CADENCE:
-#   Every 5 min (minimum GitHub allows for schedule-triggered runs). Also
-#   manually-triggerable via `workflow_dispatch` for ad-hoc checks.
+#   Every 4 hours (00:00, 04:00, 08:00, 12:00, 16:00, 20:00 UTC) — 6 runs
+#   per day. Originally `*/5 * * * *` (every 5 min, 288 runs/day) but that
+#   was too aggressive for our scale + amplified email noise from transient
+#   Cloudflare-edge flakiness in 2026-04. At 4-hour cadence the worst-case
+#   detection delay for a true outage is 4 hours, which matches how quickly
+#   we'd actually respond out-of-hours anyway.
+#
+#   Also manually-triggerable via `workflow_dispatch` for ad-hoc checks.
 # =============================================================================
 
 name: Sentry health check
 
 on:
-  # `schedule` runs on UTC. Every 5 minutes in cron syntax = */5.
   schedule:
-    - cron: '*/5 * * * *'
+    # cron format: "minute hour day month weekday" — UTC.
+    # 0 */4 * * *  → at minute 0 of every 4th hour: 00, 04, 08, 12, 16, 20.
+    - cron: '0 */4 * * *'
   # Allow manual "run now" from the Actions tab or via `gh workflow run`.
   workflow_dispatch:
 
@@ -59,29 +66,40 @@ jobs:
     timeout-minutes: 1
 
     steps:
-      - name: Curl Sentry health endpoint
+      - name: Curl Sentry health endpoint (3 retries, 20 s backoff)
         env:
           # Single source of truth for the URL we're probing. If the URL
           # changes, update here AND in project.config's PROJECT_DOMAIN.
           SENTRY_URL: https://sentry.rishi.yral.com/_health/
         run: |
-          set -euo pipefail
-          # -sS  = silent mode but show errors on stderr
-          # -w   = write-out format — we want the numeric HTTP status
-          # -o   = write body to /dev/null (we don't care about body content,
-          #        only the status code)
-          # --max-time 10  = bail after 10 seconds total (connect + body)
-          STATUS=$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$SENTRY_URL")
-          echo "GET $SENTRY_URL → $STATUS"
+          set -uo pipefail
+          # WHY 3 ATTEMPTS WITH BACKOFF:
+          # Cloudflare's edge ↔ origin pull is occasionally flaky from the
+          # GitHub-runner's region (observed cluster of 9 false-failure
+          # alerts on 2026-04-26 while origin was perfectly healthy the
+          # whole time). A single transient curl timeout is NOT a real
+          # outage; we only declare failure if 3 spaced attempts all fail.
+          # This eliminates the email noise without missing a real outage
+          # — Sentry being down for 50+ seconds (3 × 10s timeout + 2 × 20s
+          # backoff) is still well within our 4-hour worst-case detection.
+          ATTEMPTS=3
+          BACKOFF=20
+          for i in $(seq 1 $ATTEMPTS); do
+            STATUS=$(curl -sS --max-time 10 -o /dev/null -w "%{http_code}" "$SENTRY_URL" 2>/dev/null || echo "000")
+            echo "attempt $i/$ATTEMPTS: GET $SENTRY_URL → $STATUS"
+            if [[ "$STATUS" == "200" ]]; then
+              echo "Sentry is healthy."
+              exit 0
+            fi
+            if [[ "$i" -lt "$ATTEMPTS" ]]; then
+              echo "  (sleeping ${BACKOFF}s before retry)"
+              sleep "$BACKOFF"
+            fi
+          done
 
-          if [[ "$STATUS" != "200" ]]; then
-            # GitHub Actions' `::error::` prefix surfaces this as a red
-            # annotation in the run summary AND in the scheduled-run email.
-            echo "::error title=Sentry is unhealthy::HTTP $STATUS from $SENTRY_URL (expected 200)"
-            exit 1
-          fi
-
-          echo "Sentry is healthy."
+          # All attempts failed — surface as a CI annotation + email.
+          echo "::error title=Sentry is unhealthy::All $ATTEMPTS probes to $SENTRY_URL failed (last status: $STATUS)"
+          exit 1
 
   # ==========================================================================
   # cpu-pressure — detects when rishi-3 is under sustained load
