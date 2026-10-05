@@ -329,3 +329,28 @@ ssh deploy@136.243.147.225
 7. If using cron monitors / custom alert rules, recreate them. (We don't currently have any.)
 
 **Event history is lost.** Old issues, performance traces before the reconstruction, user feedback — all gone. This is the accepted trade-off for not running daily backups.
+
+## 10. Rebuild Sentry on another server (its server died)
+
+Sentry is a docker-compose install on one server, outside the swarm (its
+official installer only supports compose). Losing that server loses Sentry
+until it's rebuilt; error history is not backed up, settings are.
+
+1. Pick a swarm server with ~25 GB free RAM. Fetch the newest backup from
+   Garage bucket `sentry-backups/<timestamp>/` (`sentry-install.tgz`,
+   `sentry-postgres.dump`).
+2. `mkdir ~/sentry && tar xzf sentry-install.tgz -C ~/sentry`, then repoint
+   `sentry-upstream/docker-compose.override.yml` at
+   `~/sentry/yral-rishi-sentry/docker-compose.override.yml` (it's a symlink).
+3. `docker volume create sentry-postgres`, then
+   `docker compose --env-file .env --env-file .env.custom up -d postgres` and
+   `pg_restore -U postgres -d postgres < sentry-postgres.dump` into it.
+4. `set -a; . ./.env.custom; set +a; ./install.sh --skip-user-creation
+   --no-report-self-hosted-issues --apply-automatic-config-updates`
+   (~15 min), then `docker compose --env-file .env --env-file .env.custom up -d --wait`.
+5. nginx joins `yral-v2-public-web` at 10.0.1.11 (the override pins it), so
+   the edge needs no change. Check `https://sentry.rishi.yral.com/_health/`.
+6. Copy `scripts/backup-settings.sh` to `~/sentry/`, recreate
+   `.garage_backup_key`, and add the 02:30 UTC cron line.
+
+Done this way on 2026-10-04 (rishi-3 → india-3) in about 30 minutes.
